@@ -3322,7 +3322,7 @@
 			)
 		)
 		(property "Footprint" "PCjr_PROTO_RAM_CART_footprint_lib:Olimex_ENC28J60-H"
-			(at 0 0 0)
+			(at 4.064 -11.684 0)
 			(effects
 				(font
 					(size 1.27 1.27)
