@@ -192,7 +192,7 @@ RX_ADDRESS_END				EQU 1FFFh ; End of memory
 SEND_CTRL_BYTE db 00h
 
 %OUT Processing TXRX CODE
-
+;;; DONE
 CS_HIGH PROC NEAR ; AX isn't written, so it is already preserved
 	push	dx						; Save DX
 	mov		dx,eth_write_cs_high	; Set DX
@@ -200,7 +200,7 @@ CS_HIGH PROC NEAR ; AX isn't written, so it is already preserved
 	pop		dx						; Restore DX
 	ret
 CS_HIGH ENDP
-
+;;; DONE
 CS_LOW PROC NEAR ; AX isn't written, so it is already preserved
 	push	dx						; Save DX
 	mov		dx,eth_write_cs_low		; Set DX
@@ -208,18 +208,19 @@ CS_LOW PROC NEAR ; AX isn't written, so it is already preserved
 	pop		dx						; Restore DX
 	ret
 CS_LOW ENDP
-
+;;; DONE
 CS_START PROC NEAR
 	call	CS_HIGH					; call CS_HIGH first to ensure fresh start
 	call	CS_LOW					; call CS_LOW to initialize transfer
 	ret
 CS_START ENDP
-
+;;; DONE
 CS_END PROC NEAR
 	call	CS_HIGH					; call CS_HIGH to end transfer
 	ret
 CS_END ENDP
 
+;;; DONE
 ;; Assumes CS_START was called
 ;; Assumes AH = 1xxx xxxx - bit to transmit
 ;; Returns AH = xxxx xxx1 - bit received
@@ -235,6 +236,7 @@ TXRX_BIT PROC NEAR
 	ret
 TXRX_BIT ENDP
 
+;;; DONE
 ;; Assumes CS_START was called
 ;; Assumes AH = byte to transmit
 ;; Returns  AL
@@ -268,6 +270,7 @@ TXRX_BYTE_LOOP:
 	ret								; Returns AL
 TXRX_BYTE ENDP
 
+;;; DONE
 TXRX_BYTE3 PROC NEAR
 	push	dx
 	push	bx
@@ -367,7 +370,7 @@ TXRX_BYTE3 PROC NEAR
 	ret
 TXRX_BYTE3 ENDP
 
-
+;;; DONE
 SOFT_RESET PROC NEAR
 	push	ax
 	call	CS_START
@@ -381,6 +384,7 @@ SOFT_RESET PROC NEAR
 	ret
 SOFT_RESET ENDP
 
+;;; DONE
 ; ah, INPUT = register
 ; al, OUTPUT = value
 READ_ETH_REGISTER PROC NEAR
@@ -392,6 +396,7 @@ READ_ETH_REGISTER PROC NEAR
 	ret
 READ_ETH_REGISTER ENDP
 
+;;; DONE
 ; ah, INPUT = register
 ; al, OUTPUT = value
 READ_MAC_MII_REGISTER PROC NEAR
@@ -404,6 +409,7 @@ READ_MAC_MII_REGISTER PROC NEAR
 	ret
 READ_MAC_MII_REGISTER ENDP
 
+;;; DONE
 ; ah, INPUT = register
 ; bx, 16 bit value
 WRITE_PHY_REGISTER PROC NEAR ; Compound operation
@@ -515,6 +521,7 @@ READ_PHY_REGISTER_BUSY:
 	ret
 READ_PHY_REGISTER ENDP
 
+;;; DONE
 ; AH = REG, AL = value
 WRITE_REGISTER PROC NEAR
 	call	CS_START
