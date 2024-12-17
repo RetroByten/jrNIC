@@ -20,8 +20,8 @@ DEBUG_TEST1 EQU 0
 DEBUG_TEST2 EQU 0
 DEBUG_TEST3 EQU 0
 DEBUG_TEST4 EQU 0
-DEBUG_TEST5 EQU 1
-DEBUG_TEST6 EQU 1
+DEBUG_TEST5 EQU 0
+DEBUG_TEST6 EQU 0
 DEBUG_TEST7 EQU 1
 
 IF ROM
@@ -568,7 +568,7 @@ debug_txrx_bank db "Bank$"
 debug_txrx_test db "Test$"
 debug_txrx_erdpt db "ERDPT$"
 debug_txrx_ewrpt db "EWRPT$"
-
+debug_txrx_memory db "MEMORY$"
 ;;;;;
 ;; TEST CART - used to debug the HAL
 ;;;;;
@@ -757,7 +757,7 @@ TEST5_T: ;; 20241215 - GOOD
 	UTILM_PRINT_NEWLINE
 ENDIF
 IF DEBUG_TEST6
-TEST6_T:
+TEST6_T: ;; 202412156 - GOOD
 	;; Tests CORE COMMANDS: 
 	;READ/WRITE BUFFER MEMORY BYTE
 	;READ/WRITE BUFFER MEMORY WORD
@@ -768,16 +768,60 @@ TEST6_T:
 	UTILM_PRINT_STRN debug_txrx_reset
 	call	TXRX_SOFT_RESET
 	; b1.) Set ERDPT
-	; b2.) Read buffer memory
+	mov		ax,1000h
+	call	SET_ERDPT
+	; b2.) Read buffer memory BYTE
+	call	READ_BUFFER_MEMORY_BYTE
+	mov		ah,al
+	UTILM_PRINT_BREG debug_txrx_memory,ax
+	UTILM_PRINT_NEWLINE
+	
 	; c1.) Set EWRPT
+	mov		ax,1000h
+	call	SET_EWRPT
 	; c2.) Write buffer memory
+	mov		al,55h
+	call	WRITE_BUFFER_MEMORY_BYTE
 	
 	; d1.) Set ERDPT
+	mov		ax,1000h
+	call	SET_ERDPT
 	; d2.) Read buffer memory
+	call	READ_BUFFER_MEMORY_BYTE
+	mov		ah,al
+	UTILM_PRINT_BREG debug_txrx_memory,ax
+	UTILM_PRINT_NEWLINE
+	; e.) Reset Card
+	UTILM_PRINT_STRN debug_txrx_reset
+	call	TXRX_SOFT_RESET
+	
+	; f1.) Set ERDPT
+	mov		ax,1010h
+	call	SET_ERDPT
+	; f2.) Read buffer memory WORD
+	call	READ_BUFFER_MEMORY_WORD
+	UTILM_PRINT_WREG debug_txrx_memory,ax
+	UTILM_PRINT_NEWLINE
+	
+	; g1.) Set EWRPT
+	mov		ax,1010h
+	call	SET_EWRPT
+	; g2.) Write buffer memory WORD
+	mov		ax,0aacch
+	call	WRITE_BUFFER_MEMORY_WORD
+	; f1.) Set ERDPT
+	mov		ax,1010h
+	call	SET_ERDPT
+	; f2.) Read buffer memory WORD
+	call	READ_BUFFER_MEMORY_WORD
+	UTILM_PRINT_WREG debug_txrx_memory,ax
+	UTILM_PRINT_NEWLINE
+	UTILM_PRINT_NEWLINE
 ENDIF
 IF DEBUG_TEST7
 TEST7_T:
 	;; Tests CORE COMMANDS: READ/WRITE BUFFER MEMORY (ARRAY)
+	;; For memory, read from ds:orig_int_offset
 	mov	ah,7
 	UTILM_PRINT_BREG debug_txrx_test,ax
 	UTILM_PRINT_NEWLINE

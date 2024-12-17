@@ -619,8 +619,25 @@ WRITE_BUFFER_MEMORY_BYTE PROC NEAR
 	ret
 WRITE_BUFFER_MEMORY_BYTE ENDP
 
-; Assumes ERDPT is set!
-; AX returns single byte (AL)
+;!! PROC
+;!!		READ_BUFFER_MEMORY_WORD
+;!! Input
+;!!		ERDPT is set to start address
+;!!		ECON2:AUTOINC is set (is by default)
+;!! Output
+;!!		AX = WORD from memory(ERDPT)
+;!! Uses directly
+;!!		AX, BX
+;!! Calls
+;!!		CS_START (destroys DX)
+;!!		TXRX_BYTE (destroys AX, flags)
+;!!		CS_END (destroys DX)
+;!! Dependencies destroy
+;!!		AX, DX, flags
+;!! Directly preserves
+;!!		BX
+;!! Total destroy
+;!!		AX, DX, flags
 READ_BUFFER_MEMORY_WORD PROC NEAR
 	CS_START
 	push	bx
@@ -628,8 +645,6 @@ READ_BUFFER_MEMORY_WORD PROC NEAR
 	call	TXRX_BYTE ; send initial opcode
 	call	TXRX_BYTE ; read next byte into al
 	mov		bl,al ; save low byte
-	;mov		ah,(RBM_OPCODE SHL 5) OR BUFF_MEM_ARG
-	;call	TXRX_BYTE ; send initial opcode
 	call	TXRX_BYTE ; read next byte into al
 	mov		bh,al ; save high byte
 	mov		ax,bx ; save result
@@ -638,30 +653,43 @@ READ_BUFFER_MEMORY_WORD PROC NEAR
 	ret ; return ax
 READ_BUFFER_MEMORY_WORD ENDP
 
-; ax contains word
-; Assumes autoinc in ECON2 is set
-; Assumes EWRPT is pointing to the beginning of TX memory!
+;!! PROC
+;!!		WRITE_BUFFER_MEMORY_WORD
+;!! Input
+;!!		AX = word to write
+;!!		EWRPT is pointing at TX memory
+;!!		ECON2:AUTOINC is set (is by default)
+;!! Output
+;!!		NONE (writes to card buffer memory)
+;!! Uses directly
+;!!		AX
+;!! Calls
+;!!		CS_START (destroys DX)
+;!!		TXRX_BYTE (destroys AX, flags)
+;!!		CS_END (destroys DX)
+;!! Dependencies destroy
+;!!		AX, DX, flags
+;!! Directly preserves
+;!!		NONE
+;!! Total destroy
+;!!		AX, DX, flags
 WRITE_BUFFER_MEMORY_WORD PROC NEAR
 	CS_START
-	push	bx
+	;push	bx
 	push	ax ; save AX
 	mov		ah,(WBM_OPCODE SHL 5) OR BUFF_MEM_ARG
 	call	TXRX_BYTE ; Send initial opcode
 	pop		ax ; get back AX
 	push	ax ; save for second byte
-	xchg	ah,al ; move low byte into AH
+	mov		ah,al ; move low byte into AH
 	call	TXRX_BYTE ; send low byte
-	mov		bl,al
 	pop		ax ; ah contains high Byte
 	call	TXRX_BYTE ; send high byte byte
-	mov		bh,al ; get high byte
-	mov		ax,bx ; store in ax
-	pop		bx ; recover BX
 	CS_END
 	ret
 WRITE_BUFFER_MEMORY_WORD ENDP
 
-; BX PCjr Memory pointer
+; DS:BX PCjr Memory pointer
 ; CX Number of bytes to receive
 ; Assumes ERDPT is pointing to the beginning of RX memory!
 READ_BUFFER_MEMORY PROC NEAR
@@ -687,7 +715,7 @@ RBM_LOOP:
 	ret
 READ_BUFFER_MEMORY ENDP
 
-; BX = PCjr Memory pointer
+; DS:BX = PCjr Memory pointer
 ; CX = number of bytes to send
 ; Assumes autoinc in ECON2 is set
 ; Assumes EWRPT is pointing to the beginning of TX memory!
