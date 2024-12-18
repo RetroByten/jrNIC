@@ -22,7 +22,7 @@ DEBUG_TEST3 EQU 0
 DEBUG_TEST4 EQU 0
 DEBUG_TEST5 EQU 0
 DEBUG_TEST6 EQU 0
-DEBUG_TEST7 EQU 1
+DEBUG_TEST7 EQU 0
 
 IF ROM
 	%OUT ROM building
@@ -205,8 +205,11 @@ IF DEBUG
 	UTILM_PRINT_STRN debug_txrx_reset
 ENDIF
 	;; TODO - ensure interrupt is disabled, reset the card
-	call TXRX_SOFT_RESET ; Reset the card
-	UTILM_DELAY_ITER 20h
+	call	TXRX_SOFT_RESET ; Reset the card
+;	UTILM_DELAY_ITER 20h
+	;; Clear internal card Memory
+	call	TXRX_CLEAR_MEMORY
+
 	ret ; Far Return
 	DEBUG_PARA_ALIGN_MACRO
 INIT ENDP
@@ -828,9 +831,66 @@ TEST7_T:
 	; a.) Reset Card
 	UTILM_PRINT_STRN debug_txrx_reset
 	call	TXRX_SOFT_RESET
-	; b.) READ 8 bytes
-	; c.) Write 8 bytes
-	; d.) READ 8 bytes
+	UTILM_PRINT_STR debug_txrx_memory
+	UTILM_PRINT_COLON
+	;; Test util read memory ; needs DS:SI, CX
+	push	ds
+	mov		ax,cs
+	mov		ds,ax ; DS = CS
+	mov		si,offset orig_int_offset
+	mov		cx,0008 ; 8 bytes
+	call	UTIL_PRINT_MEM
+	pop		ds
+	UTILM_PRINT_NEWLINE
+	UTILM_PRINT_NEWLINE
+	
+	; b.) READ BUFFER 8 bytes -> to DS+PSP_SIZE, print
+	; b1.) Read buffer (ERDPT + ES:DI + CX)
+	mov		ax,1010h
+	call	SET_ERDPT
+	push	es
+	mov		ax,ds
+	mov		es,ax ; ES set
+	mov		di,PSP_SIZE; DS+PSP_SIZE
+	mov		cx,8h
+	call	READ_BUFFER_MEMORY ; Copy memory
+	pop		es
+	; b2.) print read buffer (DS:SI + CX
+	; DS is already set
+	mov		si,PSP_SIZE
+	mov		cx,8h
+	call	UTIL_PRINT_MEM
+	UTILM_PRINT_NEWLINE
+	
+	; c.) WRITE BUFFER 8 bytes <- from CS+offset orig_int_offset
+	; c1.) Write buffer (EWRPT + DS:SI + CX)
+	mov		ax,1010h
+	call	SET_EWRPT
+	push	ds
+	mov		ax,cs
+	mov		ds,ax ; DS = CS
+	mov		si,offset orig_int_offset
+	mov		cx,8h
+	call	WRITE_BUFFER_MEMORY
+	pop		ds
+	
+	; d.) READ BUFFER 8-bytes -> to DS:PSP_SIZE, print
+	; d1.) Read buffer (ERDPT + ES:DI + CX)
+	mov		ax,1010h
+	call	SET_ERDPT
+	push	es
+	mov		ax,ds
+	mov		es,ax ; ES set
+	mov		di,PSP_SIZE; DS+PSP_SIZE
+	mov		cx,8h
+	call	READ_BUFFER_MEMORY ; Copy memory
+	pop		es
+	; d2.) print read buffer (DS:SI + CX
+	; DS is already set
+	mov		si,PSP_SIZE
+	mov		cx,8h
+	call	UTIL_PRINT_MEM
+	UTILM_PRINT_NEWLINE
 ENDIF
 
 EXITCLEAN_T:

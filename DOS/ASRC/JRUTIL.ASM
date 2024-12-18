@@ -92,9 +92,39 @@ UTIL_PRINT_HEX_NIBBLES ENDP
 ;!!		DS = segment of message
 ;!!		DX = offset of message
 ;!! Output
+;!!		NONE (prints to screen TTY), mimics DOS INT 21, SVC 09h
+;!! Uses directly
+;!!		AL, DX, SI, flags
+;!! Calls
+;!!		UTIL_PRINT_CHAR (destroys AX, flags)
+;!! Dependencies destroy
+;!!		AX, flags
+;!! Directly preserves
+;!!		DX
+;!! Total destroy
+;!!		AX, SI, flags
+UTIL_PRINT_STR PROC NEAR ; Uses BIOS function
+	xchg		si,dx ; Use SI as index, save old SI
+UTIL_PRINT_STR_LOOP:
+	lodsb	; mov al,ds:[si], inc si
+	cmp		al,'$'
+	je		UTIL_PRINT_STR_DONE
+	call	UTIL_PRINT_CHAR
+	jmp		UTIL_PRINT_STR_LOOP
+UTIL_PRINT_STR_DONE:
+	mov		si,dx ; Get back SI
+	ret
+UTIL_PRINT_STR ENDP
+
+;!! PROC
+;!!		UTIL_PRINT_MEM
+;!! Input
+;!!		DS = segment of message
+;!!		SI = offset of message
+;!! Output
 ;!!		NONE (prints to screen TTY)
 ;!! Uses directly
-;!!		AL, SI, flags
+;!!		AX, CX, SI, flags
 ;!! Calls
 ;!!		UTIL_PRINT_CHAR (destroys AX, flags)
 ;!! Dependencies destroy
@@ -102,19 +132,17 @@ UTIL_PRINT_HEX_NIBBLES ENDP
 ;!! Directly preserves
 ;!!		NONE
 ;!! Total destroy
-;!!		AX, SI, flags
-UTIL_PRINT_STR PROC NEAR ; Uses BIOS function
-	mov		si,dx ; first offset
-UTIL_PRINT_STR_LOOP:
-	mov		al,[si]
-	cmp		al,'$'
-	je		UTIL_PRINT_STR_DONE
-	call	UTIL_PRINT_CHAR
-	inc		si
-	jmp		UTIL_PRINT_STR_LOOP
-UTIL_PRINT_STR_DONE:
+;!!		AX, CX, SI, flags
+UTIL_PRINT_MEM PROC NEAR
+	lodsb		; mov al,ds:[si], inc si
+	mov			ah,al
+	push		cx
+	mov			cx,0002h ; 2 nibbles ah
+	call		UTIL_PRINT_HEX_NIBBLES
+	pop			cx
+	loop		UTIL_PRINT_MEM
 	ret
-UTIL_PRINT_STR ENDP
+UTIL_PRINT_MEM ENDP
 
 ;!! PROC
 ;!!		UTIL_ASCII_NUM_TO_HEX
