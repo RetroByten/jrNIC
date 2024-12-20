@@ -95,9 +95,10 @@ MACLCON2_REGISTE		EQU 09h ;MAC/MII
 MAMXFLL_REGISTER		EQU 0Ah ;MAC/MII
 MAMXFLH_REGISTER		EQU 0Bh ;MAC/MII
 MICMD_REGISTER			EQU 12h ;MAC/MII
-	MICMD_MIIRD_MASK_CLEAR	EQU 0FEh 
-	MICMD_MIIRD_SET			EQU 01h 
-	MICMD_MIIRD_CLEAR		EQU 00h 
+;	MICMD_MIIRD_MASK_CLEAR	EQU 0FEh
+	MICMD_MIIRD_BIT			EQU 01h
+;	MICMD_MIIRD_SET			EQU 01h 
+;	MICMD_MIIRD_CLEAR		EQU 00h 
 MIREGADR_REGISTER		EQU 14h ;MAC/MII
 MIWRL_REGISTER			EQU 16h ;MAC/MII
 MIWRH_REGISTER			EQU 17h ;MAC/MII
@@ -113,7 +114,8 @@ MAADR4_REGISTER		EQU 03h ;MAC/MII
 MAADR1_REGISTER		EQU 04h ;MAC/MII
 MAADR2_REGISTER		EQU 05h ;MAC/MII
 MISTAT_REGISTER		EQU 0Ah ;MAC/MII
-	MISTAT_BUSY_GET		EQU 01h 
+	MISTAT_BUSY_BIT		EQU 01h
+;	MISTAT_BUSY_GET		EQU 01h 
 EBSTSD_REGISTER		EQU 06h 
 EBSTCON_REGISTER	EQU 07h 
 EBSTCSL_REGISTER	EQU 08h 
@@ -887,137 +889,175 @@ READ_MAC_MII_REGISTER PROC NEAR
 READ_MAC_MII_REGISTER ENDP
 
 
-; ah, INPUT = register
-; ax, OUTPUT = value
 ;!! PROC
 ;!!		READ_PHY_REGISTER
 ;!! Input
-;!!		AH = Register
+;!!		AH = PHY Register
 ;!! Output
 ;!!		AX = Value
 ;!! Uses directly
-;!!		;;;;;;;;; TODO AX, ;;;;;;;;;;
+;!!		AX, BX, flags
 ;!! Calls
 ;!!		GET_CONTROLLER_BANK (destroys AX, DX, flags)
 ;!!		SET_CONTROLLER_BANK (destroys AX, DX, flags, ETH:BANK)
 ;!!		WRITE_REGISTER (destroys AX, DX, flags)
+;!!		BIT_FIELD_SET (destroys AX, DX, flags)
 ;!!		READ_MAC_MII_REGISTER (destroys AX, DX, flags)
 ;!! Dependencies destroy
 ;!!		AX, DX, flags, ETH:BANK
 ;!! Directly preserves
-;!!		
+;!!		BX, ETH:BANK
 ;!! Total destroy
-;!!		
+;!!		AX, DX, flags
 READ_PHY_REGISTER PROC NEAR
-	
-	;; TODO
-	
-	
 	; Datasheet 3.3
-	push	bx ; used as a temporary
-	push	ax ; save ah (input register)
 	
-	; Step 0 Save current Bank
+	; 1.) Write the address of the PHY register into MIREGADR_REGISTER (BANK2)
+	; 2.) Set MICMD.MIIRD bit (BANK2)
+	; 3.) Poll MISTAT.BUSY until clear (BANK3)
+	; 4.) Clear MICMD.MIIRD bit (BANK2)
+	; 5.) Read the desired data from MIRDL and MIRDH (BANK2)
+	
+	push	bx ; Preserve BX
+	push	ax ; save ah (input register) while swapping bank
+	
+	; 0.) Save current bank
+	; Get current bank
 	call	GET_CONTROLLER_BANK
-	mov		bh,al ; move current_bank to bh
+	mov		bh,al ; BH contains original bank
 	
 	; Set BANK2
 	mov		ah,BANK2
 	call	SET_CONTROLLER_BANK
 	
-	pop		ax ; get input register back (ah)
-	push	bx ; push current bank (bh)
+	; Get back AX (ah = input register)
+	pop		ax
 	
-	; Step 1, ah = desired PHY register, write that as data to MIREGADR
-	mov		al,ah ; move PHY reg to al
+	; Save current bank
+	push	bx
+
+	; 1.) Write address of PHY register into MIREGADR_REGISTER (BANK2)
+	mov		al,ah ; set value to PHY register
 	mov		ah,MIREGADR_REGISTER
 	call	WRITE_REGISTER
 	
-	; Step 2, Set MIIRD in MICMD register to initiate read, Sets MISTAT.BUSY until complete
-	mov		ax,(MICMD_REGISTER SHL 8) OR MICMD_MIIRD_SET
-	call	WRITE_REGISTER
-	
-	; Step 3, Wait until MISTAT.BUSY is cleared
+	; 2.) Set MICMD.MIIRD bit MICMD_MIIRD_BIT (BANK2)
+	mov		ax,(MICMD_REGISTER SHL 8) OR MICMD_MIIRD_BIT
+	call	BIT_FIELD_SET
+
+	; 3.) Poll MISTAT.BUSY until clear (BANK3)
+	; Set BANK 3
 	mov		ah,BANK3
-	call	SET_CONTROLLER_BANK 
+	call	SET_CONTROLLER_BANK
+	; Poll MISTAT.BUSY
 READ_PHY_REGISTER_BUSY:
 	mov		ah,MISTAT_REGISTER
 	call	READ_MAC_MII_REGISTER 
-	and		al,MISTAT_BUSY_GET
-	cmp		al,00h
-	jne		READ_PHY_REGISTER_BUSY
+	test	al,MISTAT_BUSY_BIT
+	jnz		READ_PHY_REGISTER_BUSY
 
-	; Step 4, now that the value is ready, clear the MICMD bit
+	; 4.) Clear MICMD.MIIRD bit (BANK2)
+	; Set BANK 2
 	mov		ah,BANK2
 	call	SET_CONTROLLER_BANK
-	mov		ax,(MICMD_REGISTER SHL 8) OR 0 ; 0 value to clear MICMD
-	call	WRITE_REGISTER
+	; Clear MICMD.MIIRD
+	mov		ah,MICMD_REGISTER
+	mov		al,MICMD_MIIRD_BIT
+	call	BIT_FIELD_CLEAR
 	
-	; Step 5, Read 16 bit value from MIRDH/MIRDL
+	;5.) Read the desired data from MIRDL and MIRDH (BANK2)
 	mov		ah,MIRDH_REGISTER
 	call	READ_MAC_MII_REGISTER
-	mov		bh,al ; save high byte
+	mov		bh,al ; store in bh
 	mov		ah,MIRDL_REGISTER
-	call	READ_MAC_MII_REGISTER
-	mov		bl,al ; save low byte, BX now contains value
+	mov		bl,al ; store in bl, BX contains value
 
-	; Step 6, Restore bank
-	pop		ax ; ah = original bank
+	; Restore current bank
+	pop		ax ; Get back current bank
 	call	SET_CONTROLLER_BANK
+	
+	mov		ax,bx ; Set AX to return value
 
-	; Step 7, move output value to AX and restore BX
-	mov		ax,bx ; move output value
-	pop		bx ; restore original BX
+	pop		bx ; Restore BX
 	ret
 READ_PHY_REGISTER ENDP
 
-; ah, INPUT = register
-; bx, 16 bit value
+;!! PROC
+;!!		READ_PHY_REGISTER
+;!! Input
+;!!		AH = PHY Register
+;!!		BX = Value
+;!! Output
+;!!		NONE
+;!! Uses directly
+;!!		AX, BX, flags
+;!! Calls
+;!!		GET_CONTROLLER_BANK (destroys AX, DX, flags)
+;!!		SET_CONTROLLER_BANK (destroys AX, DX, flags, ETH:BANK)
+;!!		WRITE_REGISTER (destroys AX, DX, flags)
+;!!		BIT_FIELD_SET (destroys AX, DX, flags)
+;!!		READ_MAC_MII_REGISTER (destroys AX, DX, flags)
+;!! Dependencies destroy
+;!!		AX, DX, flags, ETH:BANK
+;!! Directly preserves
+;!!		ETH:BANK
+;!! Total destroy
+;!!		AX, BX, DX, flags
 WRITE_PHY_REGISTER PROC NEAR ; Compound operation
-	push	bx ; save 16-bit value
-	push	ax ; save input (AH)
-	call	GET_CONTROLLER_BANK ; returns al
-	mov		bh,al ; move current_bank to bh
+	; Datasheet 3.3
+	
+	;1.) Write address of PHY Register to MIREGADR (BANK2)
+	;2.) Write lower byte to MIWRL_REGISTER (BANK2)
+	;3.) Write upper byte to MIWRH (BANK2)
+	;4.) Poll MISTAT.BUSY (BANK3) 
 
-	; Set Bank 2
+	push	bx ; preserve value
+	push	ax ; preserve PHY register
+
+	; Get controller bank
+	call	GET_CONTROLLER_BANK
+	mov		bh,al ; BH = current bank
+	
+	; Set BANK2
 	mov		ah,BANK2
 	call	SET_CONTROLLER_BANK
 	
-	;; Select PHY register
-	pop		ax ; restore input (AH)
-	mov		al,ah ; move input to al
+	;1.) Write address of PHY Register to MIREGADR (BANK2)
+	pop		ax 	; Restore PHY register
+	mov		al,ah ; set AL to PHY register
 	mov		ah,MIREGADR_REGISTER
 	call	WRITE_REGISTER
-	
-	;; Write low byte
-	pop		ax ; get original 16-bit value (old BX)
-	push	bx ; store current bank (bh)
-	push	ax ; store high byte
-	mov		ah,MIWRL_REGISTER ; al holds low byte
-	call	WRITE_REGISTER
-	
-	; Write high byte
-	pop		ax ; get high byte
-	mov		al,ah ; move high byte to al
-	mov		ah,MIWRH_REGISTER
-	call	WRITE_REGISTER
 
-	; Set bank to bank 3
+	;2.) Write lower byte to MIWRL_REGISTER (BANK2)
+	pop		ax ; Restore Value (old BX)
+	push	bx ; Preserve previous bank
+	push	ax ; Preserve Value (high byte)
+	mov		ah,MIWRL_REGISTER ; al holds Value (low byte)
+	call	WRITE_REGISTER
+	
+	;3.) Write upper byte to MIWRH (BANK2)
+	pop		ax ; Restore Value (high byte)
+	mov		al,ah ; move high byte to al
+	mov		ah,MIWRL_REGISTER
+	call	WRITE_REGISTER
+	
+	;4.) Poll MISTAT.BUSY (BANK3) 
+	; Set Bank 3
 	mov		ah,BANK3
 	call	SET_CONTROLLER_BANK
 	
-	; Wait for MISTAT.BUSY to clear
+	; poll
+	; Poll MISTAT.BUSY
 WRITE_PHY_REGISTER_BUSY:
 	mov		ah,MISTAT_REGISTER
-	call	READ_MAC_MII_REGISTER
-	and		al,MISTAT_BUSY_GET
-	cmp		al,00h
-	jne		WRITE_PHY_REGISTER_BUSY
-	
-	;; Restore Bank
-	pop		ax ; ah contains original bank
+	call	READ_MAC_MII_REGISTER 
+	test	al,MISTAT_BUSY_BIT
+	jnz		WRITE_PHY_REGISTER_BUSY
+
+	; Restore Bank
+	pop		ax ; Restore AH = original BANK
 	call	SET_CONTROLLER_BANK
-	
+
 	ret
 WRITE_PHY_REGISTER ENDP
 
@@ -1146,27 +1186,6 @@ SET_EWRPT ENDP
 ;;;;;;;;;; TODO
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-
-
-
-
-
-
-
-
-
-;;;;;;;;;;;;;;;;;
-; Compound read/writes
-;;;;;;;;;;;;;;;;;
-
-
-
-
-
-
-
-
 
 
 ;;;;;;;;;;;;;;;;;
