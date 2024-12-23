@@ -65,7 +65,10 @@ EPMCSH_REGISTER		EQU 11h
 EPMOL_REGISTER		EQU 14h
 EPMOH_REGISTER		EQU 15h
 ERXFCON_REGISTER	EQU 18h ; Receive Filter control register
-	ERXFCON_UCEN_SET	EQU 80h
+	ERXFCON_UCEN_BIT	EQU 80h
+	ERXFCON_CRCEN_BIT	EQU 20h
+	ERXFCON_PMEN_BIT	EQU 10h
+	ERXFCON_UCEN_SET	EQU 80h ; TODO, remove _SETs
 	ERXFCON_CRCEN_SET	EQU 20h
 	ERXFCON_PMEN_SET	EQU 10h
 EPKTCNT_REGISTER	EQU 19h
@@ -107,6 +110,7 @@ MIRDH_REGISTER			EQU 19h ;MAC/MII
 
 
 BANK3						EQU 03h
+; Note, the datasheet shows these in this order
 MAADR5_REGISTER		EQU 00h ;MAC/MII
 MAADR6_REGISTER		EQU 01h ;MAC/MII
 MAADR3_REGISTER		EQU 02h ;MAC/MII
@@ -774,93 +778,6 @@ WRITE_BUFFER_MEMORY ENDP
 ;;;;;;;;;;;;;;;;;
 
 ;!! PROC
-;!!		TXRX_CLEAR_MEMORY
-;!! Input
-;!!		NONE
-;!! Output
-;!!		NONE (clears card memory)
-;!! Uses directly
-;!!		AX, CX
-;!! Calls
-;!!		SET_EWRPT (destroys AX, DX, flags, ETH:BANK)
-;!!		WRITE_BUFFER_MEMORY_BYTE (destroys AX, DX, flags)
-;!! Dependencies destroy
-;!!		AX, DX, flags, ETH:BANK
-;!! Directly preserves
-;!!		NONE
-;!! Total destroy
-;!!		AX, CX, DX, SI, flags, ETH:BANK
-TXRX_CLEAR_MEMORY PROC NEAR
-	mov		cx,RX_ADDRESS_END ; End of memory
-	xor		ax,ax ; Beginning of memory
-	call	SET_EWRPT ; Set write pointer to beginning of memory
-TXRX_CLEAR_MEMORY_LOOP:
-	xor		al,al ; Write 0 to every byte
-	call	WRITE_BUFFER_MEMORY_BYTE
-	loop	TXRX_CLEAR_MEMORY_LOOP
-	ret
-TXRX_CLEAR_MEMORY ENDP
-
-;!! PROC
-;!!		READ_ETH_REGISTER_LOW_HIGH
-;!! Input
-;!!		ETH:BANK was set previously
-;!!		AX = REG_HIGH, REG_LOW
-;!! Output
-;!!		AX = VAL_HIGH, VAL_LOW
-;!! Uses directly
-;!!		AX, BX, flags
-;!! Calls
-;!!		READ_ETH_REGISTER (destroys AX, DX, flags)
-;!! Dependencies destroy
-;!!		AX, DX, flags
-;!! Directly preserves
-;!!		BX
-;!! Total destroy
-;!!		AX, DX, flags
-READ_ETH_REGISTER_LOW_HIGH PROC NEAR
-	push	bx
-	push	ax ; save low register
-	call	READ_ETH_REGISTER ; returns AL = VAL_HIGH
-	mov		bh,al ; save high value
-	pop		ax ; get low register
-	mov		ah,al ; set low register
-	call	READ_ETH_REGISTER ; returns AL = VAL_LOW
-	mov		ah,bh ; get high value back
-	pop		bx
-	ret
-READ_ETH_REGISTER_LOW_HIGH ENDP
-
-;!! PROC
-;!!		WRITE_REGISTER_LOW_HIGH
-;!! Input
-;!!		ETH:BANK was set previously
-;!!		AX = REG_HIGH, REG_LOW
-;!!		BX = VAL_HIGH, VAL_LOW
-;!! Output
-;!!		NONE
-;!! Uses directly
-;!!		AX, BX, flags
-;!! Calls
-;!!		WRITE_REGISTER (destroys AX, DX, flags)
-;!! Dependencies destroy
-;!!		AX, DX, flags
-;!! Directly preserves
-;!!		NONE
-;!! Total destroy
-;!!		AX, BX, DX, flags
-WRITE_REGISTER_LOW_HIGH PROC NEAR
-	xchg	al,bh	; AX = REG_HIGH, VAL_HIGH
-					; BX = REG_LOW, VAL_LOW
-	push	ax ; Save high WRITE_REGISTER+VAL
-	mov		ax,bx
-	call	WRITE_REGISTER ; Write REG_LOW, VAL_LOW
-	pop		ax ; Restore high WRITE_REGISTER+VAL
-	call	WRITE_REGISTER ; Write REG_HIGH, VAL_HIGH
-	ret
-WRITE_REGISTER_LOW_HIGH ENDP
-
-;!! PROC
 ;!!		READ_MAC_MII_REGISTER
 ;!! Input
 ;!!		AH = Register
@@ -887,7 +804,6 @@ READ_MAC_MII_REGISTER PROC NEAR
 	CS_END
 	ret
 READ_MAC_MII_REGISTER ENDP
-
 
 ;!! PROC
 ;!!		READ_PHY_REGISTER
@@ -965,14 +881,15 @@ READ_PHY_REGISTER_BUSY:
 	mov		al,MICMD_MIIRD_BIT
 	call	BIT_FIELD_CLEAR
 	
-	;5.) Read the desired data from MIRDL and MIRDH (BANK2)
+	; 5.) Read the desired data from MIRDL and MIRDH (BANK2)
+	mov		ah,MIRDL_REGISTER
+	call	READ_MAC_MII_REGISTER
+	mov		bl,al ; store in bl, BX contains value
 	mov		ah,MIRDH_REGISTER
 	call	READ_MAC_MII_REGISTER
 	mov		bh,al ; store in bh
-	mov		ah,MIRDL_REGISTER
-	mov		bl,al ; store in bl, BX contains value
-
-	; Restore current bank
+		
+	; 6.) Restore current bank
 	pop		ax ; Get back current bank
 	call	SET_CONTROLLER_BANK
 	
@@ -1023,7 +940,7 @@ WRITE_PHY_REGISTER PROC NEAR ; Compound operation
 	call	SET_CONTROLLER_BANK
 	
 	;1.) Write address of PHY Register to MIREGADR (BANK2)
-	pop		ax 	; Restore PHY register
+	pop		ax 	; Restore PHY register (AH)
 	mov		al,ah ; set AL to PHY register
 	mov		ah,MIREGADR_REGISTER
 	call	WRITE_REGISTER
@@ -1035,10 +952,10 @@ WRITE_PHY_REGISTER PROC NEAR ; Compound operation
 	mov		ah,MIWRL_REGISTER ; al holds Value (low byte)
 	call	WRITE_REGISTER
 	
-	;3.) Write upper byte to MIWRH (BANK2)
+	;3.) Write upper byte to MIWRH_REGISTER (BANK2)
 	pop		ax ; Restore Value (high byte)
 	mov		al,ah ; move high byte to al
-	mov		ah,MIWRL_REGISTER
+	mov		ah,MIWRH_REGISTER
 	call	WRITE_REGISTER
 	
 	;4.) Poll MISTAT.BUSY (BANK3) 
@@ -1060,6 +977,93 @@ WRITE_PHY_REGISTER_BUSY:
 
 	ret
 WRITE_PHY_REGISTER ENDP
+
+;!! PROC
+;!!		WRITE_REGISTER_LOW_HIGH
+;!! Input
+;!!		ETH:BANK was set previously
+;!!		AX = REG_HIGH, REG_LOW
+;!!		BX = VAL_HIGH, VAL_LOW
+;!! Output
+;!!		NONE
+;!! Uses directly
+;!!		AX, BX, flags
+;!! Calls
+;!!		WRITE_REGISTER (destroys AX, DX, flags)
+;!! Dependencies destroy
+;!!		AX, DX, flags
+;!! Directly preserves
+;!!		NONE
+;!! Total destroy
+;!!		AX, BX, DX, flags
+WRITE_REGISTER_LOW_HIGH PROC NEAR
+	xchg	al,bh	; AX = REG_HIGH, VAL_HIGH
+					; BX = REG_LOW, VAL_LOW
+	push	ax ; Save high WRITE_REGISTER+VAL
+	mov		ax,bx
+	call	WRITE_REGISTER ; Write REG_LOW, VAL_LOW
+	pop		ax ; Restore high WRITE_REGISTER+VAL
+	call	WRITE_REGISTER ; Write REG_HIGH, VAL_HIGH
+	ret
+WRITE_REGISTER_LOW_HIGH ENDP
+
+;!! PROC
+;!!		READ_ETH_REGISTER_LOW_HIGH
+;!! Input
+;!!		ETH:BANK was set previously
+;!!		AX = REG_HIGH, REG_LOW
+;!! Output
+;!!		AX = VAL_HIGH, VAL_LOW
+;!! Uses directly
+;!!		AX, BX, flags
+;!! Calls
+;!!		READ_ETH_REGISTER (destroys AX, DX, flags)
+;!! Dependencies destroy
+;!!		AX, DX, flags
+;!! Directly preserves
+;!!		BX
+;!! Total destroy
+;!!		AX, DX, flags
+READ_ETH_REGISTER_LOW_HIGH PROC NEAR
+	push	bx
+	push	ax ; save low register
+	call	READ_ETH_REGISTER ; returns AL = VAL_HIGH
+	mov		bh,al ; save high value
+	pop		ax ; get low register
+	mov		ah,al ; set low register
+	call	READ_ETH_REGISTER ; returns AL = VAL_LOW
+	mov		ah,bh ; get high value back
+	pop		bx
+	ret
+READ_ETH_REGISTER_LOW_HIGH ENDP
+
+;!! PROC
+;!!		TXRX_CLEAR_MEMORY
+;!! Input
+;!!		NONE
+;!! Output
+;!!		NONE (clears card memory)
+;!! Uses directly
+;!!		AX, CX
+;!! Calls
+;!!		SET_EWRPT (destroys AX, DX, flags, ETH:BANK)
+;!!		WRITE_BUFFER_MEMORY_BYTE (destroys AX, DX, flags)
+;!! Dependencies destroy
+;!!		AX, DX, flags, ETH:BANK
+;!! Directly preserves
+;!!		NONE
+;!! Total destroy
+;!!		AX, CX, DX, SI, flags, ETH:BANK
+TXRX_CLEAR_MEMORY PROC NEAR
+	mov		cx,RX_ADDRESS_END ; End of memory
+	xor		ax,ax ; Beginning of memory
+	call	SET_EWRPT ; Set write pointer to beginning of memory
+TXRX_CLEAR_MEMORY_LOOP:
+	xor		al,al ; Write 0 to every byte
+	call	WRITE_BUFFER_MEMORY_BYTE
+	loop	TXRX_CLEAR_MEMORY_LOOP
+	ret
+TXRX_CLEAR_MEMORY ENDP
 
 ;;;;;;;;;;;;;;;;;
 ; HAL_UTIL
@@ -1193,43 +1197,101 @@ SET_EWRPT ENDP
 ;;;;;;;;;;;;;;;;;
 
 SETUP_CONTROLLER_BUFFERS PROC NEAR
-	push	bx ; save bx
-	push	ax; save ax
+	
+	;; Initialize Eth TX Start Memory Pointers to TX_ADDRESS_START
+	;	ETXSTH_REGISTER,ETXSTL_REGISTER  (BANK0)
+	;	TX_ADDRESS_START (0100h)
 	mov		ah,BANK0
 	call	SET_CONTROLLER_BANK
-	
-	; 8K Buffer, PCjr transmission will be controlled, so set the transmit
-	; buffer to be small and receive buffer to be large
-	; Set TX Memory Start High/Low
 	mov		ax,(ETXSTH_REGISTER SHL 8) OR ETXSTL_REGISTER
 	mov		bx,TX_ADDRESS_START
 	call	WRITE_REGISTER_LOW_HIGH
-		
-	; Set TX End High/Low
+
+	;; Initialize Eth TX End Memory Pointers to TX_ADDRESS_END	
+	;	ETXNDH_REGISTER,ETXNDL_REGISTER (BANK0)
+	;	TX_ADDRESS_END (06FFh)
+	mov		ah,BANK0
+	call	SET_CONTROLLER_BANK
 	mov		ax,(ETXNDH_REGISTER SHL 8) OR ETXNDL_REGISTER
 	mov		bx,TX_ADDRESS_END
 	call	WRITE_REGISTER_LOW_HIGH
 	
-	; Set RX buffer Start High/Low
+	;; Initialize Eth RX Start Memory Pointers to RX_ADDRESS_START	
+	;	ERXNDH_REGISTER,ERXNDL_REGISTER (BANK0)
+	;	RX_ADDRESS_START (0700h)
+	mov		ah,BANK0
+	call	SET_CONTROLLER_BANK
 	mov		ax,(ERXSTH_REGISTER SHL 8) OR ERXSTL_REGISTER
 	mov		bx,RX_ADDRESS_START
 	call	WRITE_REGISTER_LOW_HIGH
-		
-	; Set RX Buffer End High/Low
+	
+	;; Initialize Eth RX END Memory Pointers to RX_ADDRESS_END	
+	;	ERXNDH_REGISTER,ERXNDL_REGISTER (BANK0)
+	;	RX_ADDRESS_START (0700h)
+	mov		ah,BANK0
+	call	SET_CONTROLLER_BANK
 	mov		ax,(ERXNDH_REGISTER SHL 8) OR ERXNDL_REGISTER
 	mov		bx,RX_ADDRESS_END
 	call	WRITE_REGISTER_LOW_HIGH
-	
-	; Set Read Memory Pointers
+
+	;; Initialize Eth RX Read Pointer to beginning of read memory
+	;	ERXRDPTH_REGISTER, ERXRDPTL_REGISTER (BANK 0)
+	;	RX_ADDRESS_START (0700h)
+	mov		ah,BANK0
+	call	SET_CONTROLLER_BANK
 	mov		ax,(ERXRDPTH_REGISTER SHL 8) OR ERXRDPTL_REGISTER
 	mov		bx,RX_ADDRESS_START
 	call	WRITE_REGISTER_LOW_HIGH
 	
-	; Restore registers
-	pop		ax
-	pop		bx
 	ret
 SETUP_CONTROLLER_BUFFERS ENDP
+
+VERIFY_CONTROLLER_BUFFERS PROC NEAR
+IF	DEBUG_VERIFY_BUFFER
+	jmp		VERIFY_CONTROLLER_BUFFERS_T
+	debug_str_ETXST db "ETXST$" ; BANK0
+	debug_str_ETXND db "ETXND$" ; BANK0
+	debug_str_ERXST db "ERXST$" ; BANK0
+	debug_str_ERXND db "ERXND$" ; BANK0
+	debug_str_ERXRDPT db "ERXRDPT$" ; BANK0
+VERIFY_CONTROLLER_BUFFERS_T:
+	mov		ah,BANK0
+	call	SET_CONTROLLER_BANK
+	mov		ax,(ETXSTH_REGISTER SHL 8) OR ETXSTL_REGISTER
+	call	READ_ETH_REGISTER_LOW_HIGH
+	UTILM_PRINT_WREG debug_str_ETXST,ax
+	UTILM_PRINT_NEWLINE
+	
+	mov		ah,BANK0
+	call	SET_CONTROLLER_BANK
+	mov		ax,(ETXNDH_REGISTER SHL 8) OR ETXNDL_REGISTER
+	call	READ_ETH_REGISTER_LOW_HIGH
+	UTILM_PRINT_WREG debug_str_ETXND,ax
+	UTILM_PRINT_NEWLINE
+	
+	mov		ah,BANK0
+	call	SET_CONTROLLER_BANK
+	mov		ax,(ERXSTH_REGISTER SHL 8) OR ERXSTL_REGISTER
+	call	READ_ETH_REGISTER_LOW_HIGH
+	UTILM_PRINT_WREG debug_str_ERXST,ax
+	UTILM_PRINT_NEWLINE
+	
+	mov		ah,BANK0
+	call	SET_CONTROLLER_BANK
+	mov		ax,(ERXNDH_REGISTER SHL 8) OR ERXNDL_REGISTER
+	call	READ_ETH_REGISTER_LOW_HIGH
+	UTILM_PRINT_WREG debug_str_ERXND,ax
+	UTILM_PRINT_NEWLINE
+	
+	mov		ah,BANK0
+	call	SET_CONTROLLER_BANK
+	mov		ax,(ERXRDPTH_REGISTER SHL 8) OR ERXRDPTL_REGISTER
+	call	READ_ETH_REGISTER_LOW_HIGH
+	UTILM_PRINT_WREG debug_str_ERXRDPT,ax
+	UTILM_PRINT_NEWLINE
+ENDIF
+	ret
+VERIFY_CONTROLLER_BUFFERS ENDP
 
 SETUP_CONTROLLER_FILTERS PROC NEAR
 	push	ax
@@ -1402,7 +1464,7 @@ TXRXH_INIT PROC NEAR ;; USED TO BE TXRXH_RESET
 	UTILM_PRINT_STRN txrx_str_reset ; DEBUG API
 	
 	call	SETUP_CONTROLLER_BUFFERS
-	;call	VERIFY_CONTROLLER_BUFFERS
+	call	VERIFY_CONTROLLER_BUFFERS
 	
 	call	SETUP_CONTROLLER_FILTERS
 	;call	VERIFY_CONTROLLER_FILTERS
@@ -1422,5 +1484,12 @@ TXRXH_INIT PROC NEAR ;; USED TO BE TXRXH_RESET
 	
 	ret
 TXRXH_INIT ENDP
+
+HAL_INIT PROC NEAR
+	call	TXRX_SOFT_RESET ; 1
+	call	SETUP_CONTROLLER_BUFFERS ;2a
+	call	VERIFY_CONTROLLER_BUFFERS ;2b
+	ret
+HAL_INIT ENDP
 
 

@@ -16,14 +16,30 @@ PAGE 66,132 ; 66 lines per page, 99 characters/line
 ROM EQU 1 ; Set to 0 if COM, Set to 1 if ROM
 ;; Debugging options - only work in ROM
 DEBUG EQU 1 ; Set to 0 if not debugging
-DEBUG_TEST1 EQU 0
-DEBUG_TEST2 EQU 0
-DEBUG_TEST3 EQU 0
-DEBUG_TEST4 EQU 0
-DEBUG_TEST5 EQU 0
-DEBUG_TEST6 EQU 0
-DEBUG_TEST7 EQU 0
-DEBUG_TEST8 EQU 1 ; READ/WRITE MAC/MII, READ/WRITE PHY Register
+DEBUG_TEST1 EQU 0 ; CORE COMMANDS: 
+					; RESET
+					; READ_ETH
+					; WRITE_REG
+DEBUG_TEST2 EQU 0 ; CORE COMMANDS: 
+					; BIT_FIELD_SET
+					; BIT_FIELD_CLEAR
+DEBUG_TEST3 EQU 0 ; SUPPORT COMMANDS: 
+					; GET_CONTROLLER_BANK
+					; SET_CONTROLLER_BANK
+DEBUG_TEST4 EQU 0 ; COMPOUND COMMANDS: 
+					; WRITE_REGISTER_LOW_HIGH
+					; READ_ETH_REGISTER_LOW_HIGH
+DEBUG_TEST5 EQU 0	; SUPPORT COMMANDS: SET_ERDPT, SET_EWRPT
+DEBUG_TEST6 EQU 0 ; CORE COMMANDS: 
+					; READ/WRITE BUFFER MEMORY BYTE
+					; READ/WRITE BUFFER MEMORY WORD
+DEBUG_TEST7 EQU 0 ; CORE COMMANDS: READ/WRITE BUFFER MEMORY (ARRAY)
+DEBUG_TEST8 EQU 0 ; CORE COMMANDS: 
+					; READ/WRITE MAC/MII
+					; READ/WRITE PHY Register
+
+DEBUG_VERIFY_BUFFER EQU 1 ; Verify Controller buffers					
+;;;;;; TODO - fix debug function
 
 IF ROM
 	%OUT ROM building
@@ -473,32 +489,10 @@ DEBUG_PRINT_PROC PROC NEAR
 	ret
 DEBUG_PRINT_PROC ENDP
 
-
-DEBUG_HAL PROC NEAR
-	;call	DEBUG_HAL_BANK
-	
-	
-	ret
-DEBUG_HAL ENDP
-
-DEBUG_HAL_BANK PROC NEAR
-	call	GET_CONTROLLER_BANK
-	mov		ah,al
-	UTILM_PRINT_BREG debug_txrx_bank,ax
-	UTILM_PRINT_NEWLINE
-	
-	mov		ah,BANK2
-	call	SET_CONTROLLER_BANK
-	
-	call	GET_CONTROLLER_BANK
-	mov		ah,al
-	UTILM_PRINT_BREG debug_txrx_bank,ax
-	UTILM_PRINT_NEWLINE
-	ret
-DEBUG_HAL_BANK ENDP
-
+debug_str_init_adapter db "Initializing Adapter...$"
 INIT_ADAPTER PROC NEAR
-	;call	HAL_INIT
+	UTILM_PRINT_STRN debug_str_init_adapter
+	call	HAL_INIT
 	ret
 INIT_ADAPTER ENDP
 
@@ -550,7 +544,7 @@ CHECK_IF_ALREADY_LOADED:
 	jc		UNLOAD ; Was loaded, need to unload
 LOAD: ; 2a.)  Need to load ourselves and then TSR
 	call	LOAD_RESIDENT_TSR
-	call	DEBUG_HAL ;; Now that it's loaded, test it
+	;call	DEBUG_HAL ;; Now that it's loaded, test it
 	call	INIT_ADAPTER
 EXITTSR: ; Terminate, free up additional memory
 	; DS is already PSP
@@ -567,12 +561,12 @@ MAIN ENDP
 
 PAGE
 IF DEBUG
+;debug_txrx_todo db "TODO...add expected/actual/labels$"
 debug_txrx_reset db "Resetting jrNIC...$"
-debug_txrx_bank db "Bank$"
+debug_txrx_expected db "Expected$"
+debug_txrx_actual db "Actual$"
 debug_txrx_test db "Test$"
-debug_txrx_erdpt db "ERDPT$"
-debug_txrx_ewrpt db "EWRPT$"
-debug_txrx_memory db "MEMORY$"
+debug_txrx_complete db "Complete$"
 ;;;;;
 ;; TEST CART - used to debug the HAL
 ;;;;;
@@ -586,255 +580,439 @@ SETBLOCKSTART_T:
 	call	SET_BLOCK
 	call	DEBUG_PRINT_PROC
 IF DEBUG_TEST1
+	jmp		TEST1_T
+	debug_txrx_test1_name db "CORE COMMANDS: RESET, READ_ETH, WRITE_REG$"
+	debug_txrx_test1_read_econ1 db "Read ECON1_REGISTER$"
+	debug_txrx_test1_write_econ1 db "Write ECON1_REGISTER$"
 TEST1_T: ;; 20241215 - GOOD
-	;; Tests CORE COMMANDS: RESET, READ_ETH, WRITE_REG
+	; a.) CORE COMMANDS: RESET, READ_ETH, WRITE_REG
 	mov	ah,1
 	UTILM_PRINT_BREG debug_txrx_test,ax
 	UTILM_PRINT_NEWLINE
-	; a.) Reset Card
+	UTILM_PRINT_STRN debug_txrx_test1_name
+	
+	; b.) Reset Card
 	UTILM_PRINT_STRN debug_txrx_reset
 	call	TXRX_SOFT_RESET
-	; b.) Read Register, should be 00 (default)
+	
+	; c.) Read ECON1_REGISTER (ANY BANK), value on reset: 00
+	UTILM_PRINT_STRN debug_txrx_test1_read_econ1
+	mov		ah,00
+	UTILM_PRINT_BREG debug_txrx_expected,ax
+	UTILM_PRINT_NEWLINE
+	
 	mov		ah,ECON1_REGISTER
 	call	READ_ETH_REGISTER ; al = bank value
-	and		al,BANK_MASK
 	mov		ah,al
-	UTILM_PRINT_BREG debug_txrx_bank,ax
+	UTILM_PRINT_BREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
-	; c.) Write Register (write bank 3)
+	
+	; c.) Write ECON1_REGISTER (ANY BANK)
+	UTILM_PRINT_STRN debug_txrx_test1_write_econ1
 	mov		ah,ECON1_REGISTER
-	mov		al,BANK3
+	mov		al,BANK3 ; Set to bank 3
 	call	WRITE_REGISTER
-	; d.) Read Register (should be 03)
+
+	; d.) Read ECON1_REGISTER (ANY BANK)
+	UTILM_PRINT_STRN debug_txrx_test1_read_econ1
+	mov		ah,BANK3
+	UTILM_PRINT_BREG debug_txrx_expected,ax
+	UTILM_PRINT_NEWLINE
+
 	mov		ah,ECON1_REGISTER
 	call	READ_ETH_REGISTER ; al = bank value
-	and		al,BANK_MASK
 	mov		ah,al
-	UTILM_PRINT_BREG debug_txrx_bank,ax
+	UTILM_PRINT_BREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
-	; e.) Reset Card
-	UTILM_PRINT_STRN debug_txrx_reset
-	call	TXRX_SOFT_RESET
-	; f.) Read Register, should be 00 (default)
-	mov		ah,ECON1_REGISTER
-	call	READ_ETH_REGISTER ; al = bank value
-	and		al,BANK_MASK
-	mov		ah,al
-	UTILM_PRINT_BREG debug_txrx_bank,ax
-	UTILM_PRINT_NEWLINE
+	
+	; e.) Complete
+	UTILM_PRINT_STRN debug_txrx_complete
 	UTILM_PRINT_NEWLINE
 ENDIF
 IF DEBUG_TEST2
+	jmp		TEST2_T
+	debug_txrx_test2_name db "CORE COMMANDS: BIT_FIELD_SET, BIT_FIELD_CLEAR$"
+	debug_txrx_test2_read_econ1 db "Read ECON1_REGISTER$"
+	debug_txrx_test2_bfs_econ1 db "Bit Field Set ECON1_REGISTER$"
+	debug_txrx_test2_bfc_econ1 db "Bit Field Clear ECON1_REGISTER$"
 TEST2_T:  ;; 20241215 - GOOD
-	;; Tests CORE COMMANDS: BIT_FIELD_SET, BIT_FIELD_CLEAR
+	; a.) CORE COMMANDS: BIT_FIELD_SET, BIT_FIELD_CLEAR
 	mov	ah,2
 	UTILM_PRINT_BREG debug_txrx_test,ax
 	UTILM_PRINT_NEWLINE
-	; a.) Reset Card
+	UTILM_PRINT_STRN debug_txrx_test2_name
+	
+	; b.) Reset Card
 	UTILM_PRINT_STRN debug_txrx_reset
 	call	TXRX_SOFT_RESET
-	; b.) Read Register (should be 00)
+	
+	; c.) Read ECON1_REGISTER (ANY BANK), value on reset: 00
+	UTILM_PRINT_STRN debug_txrx_test2_read_econ1
+	mov		ah,00
+	UTILM_PRINT_BREG debug_txrx_expected,ax
+	UTILM_PRINT_NEWLINE
+	
 	mov		ah,ECON1_REGISTER
 	call	READ_ETH_REGISTER ; al = bank value
-	and		al,BANK_MASK
 	mov		ah,al
-	UTILM_PRINT_BREG debug_txrx_bank,ax
+	UTILM_PRINT_BREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
-	; c.) Set Bit Field to BANK1
+	
+	; d.) Bit Field Set ECON1_REGISTER (ANY BANK)
+	UTILM_PRINT_STRN debug_txrx_test2_bfs_econ1
 	mov		ah,ECON1_REGISTER
 	mov		al,01h ; bit field set
 	call	BIT_FIELD_SET
-	; d.) Read Register (should be 01)
+	
+	; e.) Read Register ECON1_REGISTER (ANY BANK), should be 01
+	UTILM_PRINT_STRN debug_txrx_test2_read_econ1
+	mov		ah,01
+	UTILM_PRINT_BREG debug_txrx_expected,ax
+	UTILM_PRINT_NEWLINE
+	
 	mov		ah,ECON1_REGISTER
 	call	READ_ETH_REGISTER ; al = bank value
-	and		al,BANK_MASK
 	mov		ah,al
-	UTILM_PRINT_BREG debug_txrx_bank,ax
+	UTILM_PRINT_BREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
-	; e.) Clear bit Field
+	
+	; f.) Bit Field Clear ECON1_REGISTER (ANY BANK)
+	UTILM_PRINT_STRN debug_txrx_test2_bfc_econ1
 	mov		ah,ECON1_REGISTER
-	mov		al,01h ; bit field set
+	mov		al,01h ; bit field clear
 	call	BIT_FIELD_CLEAR
-	; f.) Read Register
+	
+	; g.) Read Register ECON1_REGISTER (ANY BANK), should be 00
+	UTILM_PRINT_STRN debug_txrx_test2_read_econ1
+	mov		ah,00
+	UTILM_PRINT_BREG debug_txrx_expected,ax
+	UTILM_PRINT_NEWLINE
+	
 	mov		ah,ECON1_REGISTER
 	call	READ_ETH_REGISTER ; al = bank value
-	and		al,BANK_MASK
 	mov		ah,al
-	UTILM_PRINT_BREG debug_txrx_bank,ax
+	UTILM_PRINT_BREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
+
+	; h.) Complete
+	UTILM_PRINT_STRN debug_txrx_complete
 	UTILM_PRINT_NEWLINE
 ENDIF
 IF DEBUG_TEST3
+	jmp		TEST3_T
+	debug_txrx_test3_name db "SUPPORT COMMANDS: SET_CONTROLLER_BANK, GET_CONTROLLER_BANK$"
+	debug_txrx_test3_get_bank db "GET_CONTROLLER_BANK$"
+	debug_txrx_test3_set_bank db "SET_CONTROLLER_BANK$"	
 TEST3_T: ;; 20241215 - GOOD
-	;; Tests Support Commands: SET_CONTROLLER_BANK, GET_CONTROLLER_BANK
+	; a.) SUPPORT COMMANDS: SET_CONTROLLER_BANK, GET_CONTROLLER_BANK
 	mov	ah,3
 	UTILM_PRINT_BREG debug_txrx_test,ax
 	UTILM_PRINT_NEWLINE
-	; a.) Reset Card
+	UTILM_PRINT_STRN debug_txrx_test3_name
+	
+	; b.) Reset Card
 	UTILM_PRINT_STRN debug_txrx_reset
 	call	TXRX_SOFT_RESET
-	; b.) Read current bank, should be 00 (default)
+	
+	; c.) Call GET_CONTROLLER_BANK, should be 00 (default)
+	UTILM_PRINT_STRN debug_txrx_test3_get_bank
+	mov		ah,00
+	UTILM_PRINT_BREG debug_txrx_expected,ax
+	UTILM_PRINT_NEWLINE
 	call	GET_CONTROLLER_BANK
 	mov		ah,al ; move to AH
-	UTILM_PRINT_BREG debug_txrx_bank,ax
+	UTILM_PRINT_BREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
-	; c.) Set Bank to 2
-	mov		ah,2
+	
+	; d.) Call SET_CONTROLLER_BANK
+	UTILM_PRINT_STRN debug_txrx_test3_set_bank
+	mov		ah,BANK2
 	call	SET_CONTROLLER_BANK
-	; d.) Read current bank, should be 02
+	
+	; e.) Call GET_CONTROLLER_BANK, should be 02
+	UTILM_PRINT_STRN debug_txrx_test3_get_bank
+	mov		ah,02
+	UTILM_PRINT_BREG debug_txrx_expected,ax
+	UTILM_PRINT_NEWLINE
 	call	GET_CONTROLLER_BANK
 	mov		ah,al ; move to AH
-	UTILM_PRINT_BREG debug_txrx_bank,ax
+	UTILM_PRINT_BREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
+
+	; f.) Complete
+	UTILM_PRINT_STRN debug_txrx_complete
 	UTILM_PRINT_NEWLINE
 ENDIF
 IF DEBUG_TEST4
+	jmp		TEST4_T
+	debug_txrx_test4_name db "COMPOUND COMMANDS:"
+		db "WRITE_REGISTER_LOW_HIGH, "
+		db "READ_ETH_REGISTER_LOW_HIGH$"
+	debug_txrx_test4_read_ERDPT  db "Read ERDPT$"
+	debug_txrx_test4_write_ERDPT db "Write ERDPT$"	
 TEST4_T: ;; 20241215 - GOOD
-	;; Tests Compound Command:
-	;WRITE_REGISTER_LOW_HIGH
-	;READ_ETH_REGISTER_LOW_HIGH
-	
+	; a.) COMPOUND COMMANDS: WRITE_REGISTER_LOW_HIGH,
+	; 						READ_ETH_REGISTER_LOW_HIGH
 	mov	ah,4
 	UTILM_PRINT_BREG debug_txrx_test,ax
 	UTILM_PRINT_NEWLINE
-	; a.) Reset Card
+	UTILM_PRINT_STRN debug_txrx_test4_name
+	
+	; b.) Reset Card
 	UTILM_PRINT_STRN debug_txrx_reset
 	call	TXRX_SOFT_RESET
-	;; Set BANK0
+	
+	; c.) Read 16-bit ERDPT_REGISTER (BANK0) Low, High
+	UTILM_PRINT_STRN debug_txrx_test4_read_ERDPT
+	mov		al,0FAh ; 1111 1010 
+	mov		ah,05h ; ---0 0101
+	UTILM_PRINT_WREG debug_txrx_expected,ax
+	UTILM_PRINT_NEWLINE
+		; Set BANK0
 	mov		ah,BANK0
 	call	SET_CONTROLLER_BANK
-	;b. ) Read low, high ERDPTH
+		; Read ERDPT_REGISTER
 	mov		ax,(ERDPTH_REGISTER SHL 8) OR ERDPTL_REGISTER
 	call	READ_ETH_REGISTER_LOW_HIGH
-	UTILM_PRINT_WREG debug_txrx_erdpt,ax
+	UTILM_PRINT_WREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
-	;c.) Write low-high ERDPT
+	
+	; d.) Write 16-bit ERDPT_REGISTER (BANK0) Low, High
+	UTILM_PRINT_STRN debug_txrx_test4_write_ERDPT
+		; Set BANK0
+	mov		ah,BANK0
+	call	SET_CONTROLLER_BANK
+		; Write ERDPT_REGISTER
 	mov		ax,(ERDPTH_REGISTER SHL 8) OR ERDPTL_REGISTER
 	mov		bx,0123h
 	call	WRITE_REGISTER_LOW_HIGH ; BANK0
-	;d. ) Read low, high ERDPTH
+	
+	; e.) Read 16-bit ERDPT_REGISTER (BANK0) Low, High
+	UTILM_PRINT_STRN debug_txrx_test4_read_ERDPT
+	mov		al,23h 
+	mov		ah,01h
+	UTILM_PRINT_WREG debug_txrx_expected,ax
+	UTILM_PRINT_NEWLINE
+		; Set BANK0
+	mov		ah,BANK0
+	call	SET_CONTROLLER_BANK
+		; Read ERDPT_REGISTER
 	mov		ax,(ERDPTH_REGISTER SHL 8) OR ERDPTL_REGISTER
 	call	READ_ETH_REGISTER_LOW_HIGH
-	UTILM_PRINT_WREG debug_txrx_erdpt,ax
+	UTILM_PRINT_WREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
+	
+	; f.) Complete
+	UTILM_PRINT_STRN debug_txrx_complete
 	UTILM_PRINT_NEWLINE
 ENDIF
 IF DEBUG_TEST5
+	jmp		TEST5_T
+	debug_txrx_test5_name db "SUPPORT COMMANDS: SET_ERDPT, SET_EWRPT$"
+	debug_txrx_test5_read_ERDPT  db "Read ERDPT$"
+	debug_txrx_test5_set_ERDPT db "SET_ERDPT$"
+	debug_txrx_test5_read_EWRPT  db "Read EWRPT$"
+	debug_txrx_test5_set_EWRPT db "SET_EWRPT$"	
 TEST5_T: ;; 20241215 - GOOD
-	;; Tests Support Commands: 
-	; SET_ERDPT, SET_EWRPT
+	; a.) SUPPORT COMMANDS: SET_ERDPT, SET_EWRPT
 	mov	ah,5
 	UTILM_PRINT_BREG debug_txrx_test,ax
 	UTILM_PRINT_NEWLINE
-	; a.) Reset Card
+	UTILM_PRINT_STRN debug_txrx_test5_name
+	
+	; b.) Reset Card
 	UTILM_PRINT_STRN debug_txrx_reset
 	call	TXRX_SOFT_RESET
-	;; Set BANK0
+
+	; c.) Read 16-bit ERDPT_REGISTER (BANK0) Low, High
+	UTILM_PRINT_STRN debug_txrx_test5_read_ERDPT
+	mov		al,0FAh ; 1111 1010 
+	mov		ah,05h ; ---0 0101
+	UTILM_PRINT_WREG debug_txrx_expected,ax
+	UTILM_PRINT_NEWLINE
+		; Set BANK0
 	mov		ah,BANK0
 	call	SET_CONTROLLER_BANK
-	; b.) Read ERDPT
+		; Read ERDPT_REGISTER
 	mov		ax,(ERDPTH_REGISTER SHL 8) OR ERDPTL_REGISTER
 	call	READ_ETH_REGISTER_LOW_HIGH
-	UTILM_PRINT_WREG debug_txrx_erdpt,ax
+	UTILM_PRINT_WREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
-	; c.) Write ERDPT
-	mov		ax,1023h
+
+	; d.) Call SET_ERDPT
+	UTILM_PRINT_STRN debug_txrx_test5_set_ERDPT
+	mov		ax,1025h
 	call	SET_ERDPT
-	; d.) Read ERDPT
+	
+	; e.) Read 16-bit ERDPT_REGISTER (BANK0) Low, High
+	UTILM_PRINT_STRN debug_txrx_test5_read_ERDPT
+	mov		al,25h
+	mov		ah,10h
+	UTILM_PRINT_WREG debug_txrx_expected,ax
+	UTILM_PRINT_NEWLINE
+		; Set BANK0
+	mov		ah,BANK0
+	call	SET_CONTROLLER_BANK
+		; Read ERDPT_REGISTER
 	mov		ax,(ERDPTH_REGISTER SHL 8) OR ERDPTL_REGISTER
 	call	READ_ETH_REGISTER_LOW_HIGH
-	UTILM_PRINT_WREG debug_txrx_erdpt,ax
+	UTILM_PRINT_WREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
-	; e.) Read EWRPT
+	
+	; f.) Read 16-bit EWRPT_REGISTER (BANK0) Low, High
+	UTILM_PRINT_STRN debug_txrx_test5_read_EWRPT
+	mov		ax,0000h
+	UTILM_PRINT_WREG debug_txrx_expected,ax
+	UTILM_PRINT_NEWLINE
+		; Set BANK0
+	mov		ah,BANK0
+	call	SET_CONTROLLER_BANK
+		; Read EWRPT_REGISTER
 	mov		ax,(EWRPTH_REGISTER SHL 8) OR EWRPTL_REGISTER
 	call	READ_ETH_REGISTER_LOW_HIGH
-	UTILM_PRINT_WREG debug_txrx_ewrpt,ax
+	UTILM_PRINT_WREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
-	; f.) Write EWRPT
+	
+	; g.) Call SET_EWRPT
+	UTILM_PRINT_STRN debug_txrx_test5_set_EWRPT
 	mov		ax,1134h
 	call	SET_EWRPT
-	; g.) Read EWRPT
+	
+	; h.) Read 16-bit EWRPT_REGISTER (BANK0) Low, High
+	UTILM_PRINT_STRN debug_txrx_test5_read_EWRPT
+	mov		ax,1134h
+	UTILM_PRINT_WREG debug_txrx_expected,ax
+	UTILM_PRINT_NEWLINE
+		; Set BANK0
+	mov		ah,BANK0
+	call	SET_CONTROLLER_BANK
+		; Read EWRPT_REGISTER
 	mov		ax,(EWRPTH_REGISTER SHL 8) OR EWRPTL_REGISTER
 	call	READ_ETH_REGISTER_LOW_HIGH
-	UTILM_PRINT_WREG debug_txrx_ewrpt,ax
+	UTILM_PRINT_WREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
+	
+	; i.) Complete
+	UTILM_PRINT_STRN debug_txrx_complete
 	UTILM_PRINT_NEWLINE
 ENDIF
 IF DEBUG_TEST6
+	jmp		TEST6_T
+	debug_txrx_test6_name db "CORE COMMANDS: "
+	db "READ/WRITE BUFFER MEMORY BYTE, "
+	db "READ/WRITE BUFFER MEMORY WORD$"
+	debug_txrx_test6_unk			   db "Expected (unknown)$"
+	debug_txrx_test6_read_memory_byte  db "Read memory byte$"
+	debug_txrx_test6_write_memory_byte db "Write memory byte$"
+	debug_txrx_test6_read_memory_word  db "Read memory word$"
+	debug_txrx_test6_write_memory_word db "Write memory word$"
 TEST6_T: ;; 202412156 - GOOD
-	;; Tests CORE COMMANDS: 
-	;READ/WRITE BUFFER MEMORY BYTE
-	;READ/WRITE BUFFER MEMORY WORD
+	; a.) CORE COMMANDS: 
+	; READ/WRITE BUFFER MEMORY BYTE
+	; READ/WRITE BUFFER MEMORY WORD
 	mov	ah,6
 	UTILM_PRINT_BREG debug_txrx_test,ax
 	UTILM_PRINT_NEWLINE
-	; a.) Reset Card
+	UTILM_PRINT_STRN debug_txrx_test6_name
+	
+	; b.) Reset Card
 	UTILM_PRINT_STRN debug_txrx_reset
 	call	TXRX_SOFT_RESET
-	; b1.) Set ERDPT
+	
+	; c.) Call SET_ERDPT
 	mov		ax,1000h
 	call	SET_ERDPT
-	; b2.) Read buffer memory BYTE
+	
+	; d.) Read single buffer memory byte (default state unknown)
+	UTILM_PRINT_STRN debug_txrx_test6_read_memory_byte
+	UTILM_PRINT_STRN debug_txrx_test6_unk
 	call	READ_BUFFER_MEMORY_BYTE
-	mov		ah,al
-	UTILM_PRINT_BREG debug_txrx_memory,ax
+	mov		ah,al ; move byte to print
+	UTILM_PRINT_BREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
 	
-	; c1.) Set EWRPT
+	; e.) Call Set EWRPT
 	mov		ax,1000h
 	call	SET_EWRPT
-	; c2.) Write buffer memory
+	
+	; f.) Write single buffer memory byte
+	UTILM_PRINT_STRN debug_txrx_test6_write_memory_byte
 	mov		al,55h
 	call	WRITE_BUFFER_MEMORY_BYTE
-	
-	; d1.) Set ERDPT
+
+	; g.) Call SET_ERDPT
 	mov		ax,1000h
 	call	SET_ERDPT
-	; d2.) Read buffer memory
-	call	READ_BUFFER_MEMORY_BYTE
-	mov		ah,al
-	UTILM_PRINT_BREG debug_txrx_memory,ax
+
+	; h.) Read single buffer memory byte
+	UTILM_PRINT_STRN debug_txrx_test6_read_memory_byte
+	mov		ah,55h
+	UTILM_PRINT_BREG debug_txrx_expected, ax
 	UTILM_PRINT_NEWLINE
-	; e.) Reset Card
-	UTILM_PRINT_STRN debug_txrx_reset
-	call	TXRX_SOFT_RESET
+	call	READ_BUFFER_MEMORY_BYTE
+	mov		ah,al ; move byte to print
+	UTILM_PRINT_BREG debug_txrx_actual,ax
+	UTILM_PRINT_NEWLINE
 	
-	; f1.) Set ERDPT
+	; i.) Call SET_ERDPT
 	mov		ax,1010h
 	call	SET_ERDPT
-	; f2.) Read buffer memory WORD
+	
+	; j.) Read single buffer memory word (default state unknown)
+	UTILM_PRINT_STRN debug_txrx_test6_read_memory_word
+	UTILM_PRINT_STRN debug_txrx_test6_unk
 	call	READ_BUFFER_MEMORY_WORD
-	UTILM_PRINT_WREG debug_txrx_memory,ax
+	UTILM_PRINT_WREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
 	
-	; g1.) Set EWRPT
+	; k.) Call SET_EWRPT
 	mov		ax,1010h
 	call	SET_EWRPT
-	; g2.) Write buffer memory WORD
+	
+	; l.) Write single buffer word
+	UTILM_PRINT_STRN debug_txrx_test6_write_memory_word
 	mov		ax,0aacch
 	call	WRITE_BUFFER_MEMORY_WORD
-	; f1.) Set ERDPT
+	
+	; m.) Call SET_ERDPT
 	mov		ax,1010h
 	call	SET_ERDPT
-	; f2.) Read buffer memory WORD
-	call	READ_BUFFER_MEMORY_WORD
-	UTILM_PRINT_WREG debug_txrx_memory,ax
+	
+	; n.) Read single buffer memory word (default state unknown)
+	UTILM_PRINT_STRN debug_txrx_test6_read_memory_word
+	mov		ax,0aacch
+	UTILM_PRINT_WREG debug_txrx_expected, ax
 	UTILM_PRINT_NEWLINE
+	call	READ_BUFFER_MEMORY_WORD
+	UTILM_PRINT_WREG debug_txrx_actual,ax
+	UTILM_PRINT_NEWLINE
+
+	; o.) Complete
+	UTILM_PRINT_STRN debug_txrx_complete
 	UTILM_PRINT_NEWLINE
 ENDIF
 IF DEBUG_TEST7
+	jmp		TEST7_T
+	debug_txrx_test7_name db "CORE COMMANDS: "
+	db "READ/WRITE BUFFER MEMORY (ARRAY)$"
+	debug_txrx_test7_memory				db "PCjr Memory contents$"
+	debug_txrx_test7_read_mem_array  db "Read memory array$"
+	debug_txrx_test7_write_mem_array  db "Write memory array$"
 TEST7_T:
-	;; Tests CORE COMMANDS: READ/WRITE BUFFER MEMORY (ARRAY)
+	; a.) CORE COMMANDS: READ/WRITE BUFFER MEMORY (ARRAY)
 	;; For memory, read from ds:orig_int_offset
 	mov	ah,7
 	UTILM_PRINT_BREG debug_txrx_test,ax
 	UTILM_PRINT_NEWLINE
-	; a.) Reset Card
+	UTILM_PRINT_STRN debug_txrx_test7_name
+	
+	; b.) Reset Card
 	UTILM_PRINT_STRN debug_txrx_reset
 	call	TXRX_SOFT_RESET
-	UTILM_PRINT_STR debug_txrx_memory
+		
+	;; c.) Read PCjr memory: read memory ; needs DS:SI, CX
+	UTILM_PRINT_STR debug_txrx_test7_memory
 	UTILM_PRINT_COLON
-	;; Test util read memory ; needs DS:SI, CX
 	push	ds
 	mov		ax,cs
 	mov		ds,ax ; DS = CS
@@ -843,12 +1021,17 @@ TEST7_T:
 	call	UTIL_PRINT_MEM
 	pop		ds
 	UTILM_PRINT_NEWLINE
-	UTILM_PRINT_NEWLINE
-	
-	; b.) READ BUFFER 8 bytes -> to DS+PSP_SIZE, print
-	; b1.) Read buffer (ERDPT + ES:DI + CX)
+
+	; d.) Call SET_ERDPT
 	mov		ax,1010h
 	call	SET_ERDPT
+
+	; e.) Read BUFFER MEMORY (ARRAY)
+	UTILM_PRINT_STRN debug_txrx_test7_read_mem_array
+	; READ BUFFER 8-bytes -> to DS:PSP_SIZE, print
+	; Read buffer (ERDPT + ES:DI + CX)
+	UTILM_PRINT_STR debug_txrx_actual
+	UTILM_PRINT_COLON
 	push	es
 	mov		ax,ds
 	mov		es,ax ; ES set
@@ -856,17 +1039,21 @@ TEST7_T:
 	mov		cx,8h
 	call	READ_BUFFER_MEMORY ; Copy memory
 	pop		es
-	; b2.) print read buffer (DS:SI + CX
+	; e2.) print read buffer (DS:SI + CX
 	; DS is already set
 	mov		si,PSP_SIZE
 	mov		cx,8h
 	call	UTIL_PRINT_MEM
 	UTILM_PRINT_NEWLINE
 	
-	; c.) WRITE BUFFER 8 bytes <- from CS+offset orig_int_offset
-	; c1.) Write buffer (EWRPT + DS:SI + CX)
+	; f.) Call SET_EWRPT
 	mov		ax,1010h
 	call	SET_EWRPT
+	
+	; g.) Write BUFFER MEMORY (ARRAY)
+	UTILM_PRINT_STRN debug_txrx_test7_write_mem_array
+	; WRITE BUFFER 8 bytes <- from CS+offset orig_int_offset
+	; Write buffer (EWRPT + DS:SI + CX)
 	push	ds
 	mov		ax,cs
 	mov		ds,ax ; DS = CS
@@ -874,11 +1061,17 @@ TEST7_T:
 	mov		cx,8h
 	call	WRITE_BUFFER_MEMORY
 	pop		ds
-	
-	; d.) READ BUFFER 8-bytes -> to DS:PSP_SIZE, print
-	; d1.) Read buffer (ERDPT + ES:DI + CX)
+
+	; h.) Call SET_ERDPT 
 	mov		ax,1010h
 	call	SET_ERDPT
+
+	; i.) Read BUFFER MEMORY (ARRAY)
+	UTILM_PRINT_STRN debug_txrx_test7_read_mem_array
+	; READ BUFFER 8-bytes -> to DS:PSP_SIZE, print
+	; Read buffer (ERDPT + ES:DI + CX)
+	UTILM_PRINT_STR debug_txrx_actual
+	UTILM_PRINT_COLON
 	push	es
 	mov		ax,ds
 	mov		es,ax ; ES set
@@ -886,21 +1079,101 @@ TEST7_T:
 	mov		cx,8h
 	call	READ_BUFFER_MEMORY ; Copy memory
 	pop		es
-	; d2.) print read buffer (DS:SI + CX
+	; i2.) print read buffer (DS:SI + CX
 	; DS is already set
 	mov		si,PSP_SIZE
 	mov		cx,8h
 	call	UTIL_PRINT_MEM
 	UTILM_PRINT_NEWLINE
+
+	; j.) Complete
+	UTILM_PRINT_STRN debug_txrx_complete
+	UTILM_PRINT_NEWLINE
 ENDIF
 IF DEBUG_TEST8
+	jmp		TEST8_T
+	debug_txrx_test8_name db "COMPOUND COMMANDS: "
+	db "READ/WRITE MAC/MII"
+	db "READ/WRITE PHY$"
+	
+	debug_txrx_test8_read_maddr5		db "Read MAADR5_REGISTER$"
+	debug_txrx_test8_write_maddr5		db "Write MAADR5_REGISTER$"
+	debug_txrx_test8_read_phcon2		db "Read PHCON2_REGISTER$"
+	debug_txrx_test8_write_phcon2		db "Write PHCON2_REGISTER$"
 TEST8_T:
+	; a.) COMPOUND COMMANDS: READ/WRITE MAC/MII, READ/WRITE PHY
 	mov	ah,8
 	UTILM_PRINT_BREG debug_txrx_test,ax
 	UTILM_PRINT_NEWLINE
-	; a.) Reset Card
+	UTILM_PRINT_STRN debug_txrx_test8_name
+	
+	; b.) Reset Card
 	UTILM_PRINT_STRN debug_txrx_reset
 	call	TXRX_SOFT_RESET
+	
+	;; c.) Read MAC MAADR5_REGISTER (BANK3), default 00h
+	UTILM_PRINT_STRN debug_txrx_test8_read_maddr5
+	mov		ah,00h
+	UTILM_PRINT_BREG debug_txrx_expected,ax
+	UTILM_PRINT_NEWLINE
+	mov		ah,BANK3
+	call	SET_CONTROLLER_BANK
+	mov		ah,MAADR5_REGISTER
+	call	READ_MAC_MII_REGISTER ; al
+	mov		ah,al
+	UTILM_PRINT_BREG debug_txrx_actual,ax
+	UTILM_PRINT_NEWLINE
+	
+	;; d.) Write MAC MAADR5_REGISTER (BANK3) 
+	UTILM_PRINT_STRN debug_txrx_test8_write_maddr5
+	mov		ah,BANK3
+	call	SET_CONTROLLER_BANK
+	mov		ah,MAADR5_REGISTER
+	mov		al,05h
+	call	WRITE_REGISTER
+	
+	; e.) Read MAC MAADR5_REGISTER (BANK3)
+	UTILM_PRINT_STRN debug_txrx_test8_read_maddr5
+	mov		ah,05h
+	UTILM_PRINT_BREG debug_txrx_expected,ax
+	UTILM_PRINT_NEWLINE
+	mov		ah,BANK3
+	call	SET_CONTROLLER_BANK
+	mov		ah,MAADR5_REGISTER
+	call	READ_MAC_MII_REGISTER ; al
+	mov		ah,al
+	UTILM_PRINT_BREG debug_txrx_actual,ax
+	UTILM_PRINT_NEWLINE
+
+	; f.) Read PHCON2_REGISTER, default 0000h
+	UTILM_PRINT_STRN debug_txrx_test8_read_phcon2
+	mov		ax,0000h
+	UTILM_PRINT_WREG debug_txrx_expected,ax
+	UTILM_PRINT_NEWLINE
+	mov		ah,PHCON2_REGISTER
+	call	READ_PHY_REGISTER
+	UTILM_PRINT_WREG debug_txrx_actual,ax
+	UTILM_PRINT_NEWLINE
+		
+	; g.) Write PHCON2_REGISTER
+	UTILM_PRINT_STRN debug_txrx_test8_write_phcon2
+	mov		ah,PHCON2_REGISTER
+	mov		bx,PHCON2_HDLDIS_SET
+	call	WRITE_PHY_REGISTER
+	
+	; h.) Read PHCON2_REGISTER
+	UTILM_PRINT_STRN debug_txrx_test8_read_phcon2
+	mov		ax,PHCON2_HDLDIS_SET
+	UTILM_PRINT_WREG debug_txrx_expected,ax
+	UTILM_PRINT_NEWLINE
+	mov		ah,PHCON2_REGISTER
+	call	READ_PHY_REGISTER
+	UTILM_PRINT_WREG debug_txrx_actual,ax
+	UTILM_PRINT_NEWLINE
+			
+	; i.) Complete
+	UTILM_PRINT_STRN debug_txrx_complete
+	UTILM_PRINT_NEWLINE
 ENDIF
 
 EXITCLEAN_T:
