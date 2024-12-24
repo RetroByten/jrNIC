@@ -38,7 +38,9 @@ DEBUG_TEST8 EQU 0 ; CORE COMMANDS:
 					; READ/WRITE MAC/MII
 					; READ/WRITE PHY Register
 
-DEBUG_VERIFY_BUFFER EQU 1 ; Verify Controller buffers					
+DEBUG_VERIFY_BUFFER EQU 0 ; Verify Controller buffers					
+DEBUG_VERIFY_FILTER EQU 1 ; Verify Controller filters
+DEBUG_VERIFY_MODE EQU 1 ; Verify Controller Mode
 ;;;;;; TODO - fix debug function
 
 IF ROM
@@ -128,6 +130,9 @@ MEMORY_DATA_OFFSET:
 	caller_stack_offset 		dw 0BBBBh ; Dummy
 	caller_stack_segment 		dw 0AAAAh ; Dummy
 	int_pkt_driver				db int_default_pkt_driver ; Dummy
+MAC_ADDRESS_TABLE LABEL BYTE
+	db 00h, 03h, 01h, 04h, 01h, 05h ; Default made up source MAC address
+MAC_ADDRESS_TABLE_L EQU $-MAC_ADDRESS_TABLE
 	IF ROM
 		allow_unload_env		db 0h ; Can't unload ROM env
 	ELSE
@@ -490,11 +495,20 @@ DEBUG_PRINT_PROC PROC NEAR
 DEBUG_PRINT_PROC ENDP
 
 debug_str_init_adapter db "Initializing Adapter...$"
+debug_str_todo db "TODO: HAL_INIT -> next parts$"
 INIT_ADAPTER PROC NEAR
 	UTILM_PRINT_STRN debug_str_init_adapter
 	call	HAL_INIT
+	UTILM_PRINT_STRN debug_str_todo
 	ret
 INIT_ADAPTER ENDP
+
+debug_str_todo2 db "TODO: MUST INITIALIZE RECEIVE INT"
+db "(INIT_HW_RECV_INT)$"
+INIT_HW_RECV_INT PROC NEAR
+	UTILM_PRINT_STRN debug_str_todo2
+	ret
+INIT_HW_RECV_INT ENDP
 
 ;;;;;;;;;;;;;;;;;;;;
 ;; MAIN
@@ -544,7 +558,7 @@ CHECK_IF_ALREADY_LOADED:
 	jc		UNLOAD ; Was loaded, need to unload
 LOAD: ; 2a.)  Need to load ourselves and then TSR
 	call	LOAD_RESIDENT_TSR
-	;call	DEBUG_HAL ;; Now that it's loaded, test it
+	call	INIT_HW_RECV_INT
 	call	INIT_ADAPTER
 EXITTSR: ; Terminate, free up additional memory
 	; DS is already PSP

@@ -151,7 +151,8 @@ EIR_REGISTER			EQU 1Ch
 ESTAT_REGISTER			EQU 1Dh
 	ESTAT_CLKRDY_MASK_EXTRACT	EQU 01h
 ECON2_REGISTER			EQU 1Eh
-	ECON2_AUTOINC_MASK		EQU 80h
+	;ECON2_AUTOINC_MASK		EQU 80h
+	ECON2_AUTOINC_BIT		EQU 80h
 	ECON2_PKTDEC_MASK		EQU 40h
 ECON1_REGISTER			EQU 1Fh
 	ECON1_RXEN_MASK		EQU 04h
@@ -194,10 +195,6 @@ RX_ADDRESS_END				EQU 1FFFh ; End of memory
 
 ;; Send control byte
 SEND_CTRL_BYTE db 00h
-
-MAC_ADDRESS_TABLE LABEL BYTE
-	db 00h, 03h, 01h, 04h, 01h, 05h ; Default made up source MAC address
-MAC_ADDRESS_TABLE_L EQU $-MAC_ADDRESS_TABLE
 
 ;;;;;;;;;;;;;;;;;
 ; Building Blocks
@@ -1196,8 +1193,25 @@ SET_EWRPT ENDP
 ; Setup Functions
 ;;;;;;;;;;;;;;;;;
 
+;!! PROC
+;!!		SETUP_CONTROLLER_BUFFERS
+;!! Input
+;!!		NONE
+;!! Output
+;!!		NONE (sets up the controller memory buffer pointers)
+;!! Uses directly
+;!!		AX, BX, flags
+;!! Calls
+;!!		SET_CONTROLLER_BANK (destroys AX, DX, flags, ETH:BANK)
+;!!		WRITE_REGISTER_LOW_HIGH (destroys AX, BX, DX, flags)
+;!! Dependencies destroy
+;!!		AX, BX, DX, flags, ETH:BANK
+;!! Directly preserves
+;!!		BX
+;!! Total destroy
+;!!		AX, DX, flags, ETH:BANK
 SETUP_CONTROLLER_BUFFERS PROC NEAR
-	
+	push	bx ; Preserve BX
 	;; Initialize Eth TX Start Memory Pointers to TX_ADDRESS_START
 	;	ETXSTH_REGISTER,ETXSTL_REGISTER  (BANK0)
 	;	TX_ADDRESS_START (0100h)
@@ -1243,6 +1257,7 @@ SETUP_CONTROLLER_BUFFERS PROC NEAR
 	mov		bx,RX_ADDRESS_START
 	call	WRITE_REGISTER_LOW_HIGH
 	
+	pop		bx
 	ret
 SETUP_CONTROLLER_BUFFERS ENDP
 
@@ -1293,93 +1308,202 @@ ENDIF
 	ret
 VERIFY_CONTROLLER_BUFFERS ENDP
 
+;!! PROC
+;!!		SETUP_CONTROLLER_FILTERS
+;!! Input
+;!!		NONE
+;!! Output
+;!!		NONE (sets up the controller memory buffer pointers)
+;!! Uses directly
+;!!		AX, BX, flags
+;!! Calls
+;!!		SET_CONTROLLER_BANK (destroys AX, DX, flags, ETH:BANK)
+;!!		WRITE_REGISTER (destroys AX, DX, flags)
+;!!		WRITE_REGISTER_LOW_HIGH (destroys AX, BX, DX, flags)
+;!! Dependencies destroy
+;!!		AX, BX, DX, flags, ETH:BANK
+;!! Directly preserves
+;!!		BX
+;!! Total destroy
+;!!		AX, DX, flags, ETH:BANK
 SETUP_CONTROLLER_FILTERS PROC NEAR
-	push	ax
+	push	bx ; preserve BX
+	;; Initialize Eth Receive Filter Configuration Register
+	;	ERXFCON_REGISTER (BANK1)
+	;ANDOR = 0, OR Packets, Packets will be accepted unless all enabled filters reject the packet
+	;UCEN = 1, Unicast Filter Enable, Packets with a destination address matching local MAC will be accepted
+	; - This covers everything aimed at us
+	;CRCEN = 1, Post-filter CRC Check Enable - All packets with invalid CRC will be discarded
+	;PMEN = 1, Pattern Match Filter Enable, Patterns which meet the Pattern Match criteria accepted
+	; - This is to cover broadcast ARP but reject all other broadcast
 	mov		ah,BANK1
-	call	SET_CONTROLLER_BANK 
-	
-;ANDOR = 0, OR Packets, Packets will be accepted unless all enabled filters reject the packet
-;UCEN = 1, Unicast Filter Enable, Packets with a destination address matching local MAC will be accepted
-; - This covers everything aimed at us
-;CRCEN = 1, Post-filter CRC Check Enable - All packets with invalid CRC will be discarded
-;PMEN = 1, Pattern Match Filter Enable, Patterns which meet the Pattern Match criteria accepted
-; - This is to cover broadcast ARP but reject all other broadcast
+	call	SET_CONTROLLER_BANK
 	mov		ax,(ERXFCON_REGISTER SHL 8) OR (ERXFCON_UCEN_SET OR ERXFCON_CRCEN_SET OR ERXFCON_PMEN_SET)
-	;; DEBUGING
-	; ANDOR = 0
-	;mov		ax,(ERXFCON_REGISTER SHL 8) OR (ERXFCON_CRCEN_SET) ; Check CRC only
 	call	WRITE_REGISTER
-
-;TODO - this is from example, figure out what it means
-;The pattern to match on is therefore
-;Type     ETH.DST
-;ARP      BROADCAST
-;06 08 -- ff ff ff ff ff ff -> ip checksum for theses bytes=f7f9
-;in binary these poitions are:11 0000 0011 1111
-;This is hex 303F->EPMM0=0x3f,EPMM1=0x30
-
-	;; DEBUGING - this ends up not being used
+	
+	;; Initialize packet filters
+	;TODO - this is from example, figure out what it means
+	;The pattern to match on is therefore
+	;Type     ETH.DST
+	;ARP      BROADCAST
+	;06 08 -- ff ff ff ff ff ff -> ip checksum for theses bytes=f7f9
+	;in binary these poitions are:11 0000 0011 1111
+	;This is hex 303F->EPMM0=0x3f,EPMM1=0x30
+	
+	;; Patter Match Mask Byte 0
+	mov		ah,BANK1
+	call	SET_CONTROLLER_BANK
 	mov		ax,(EPMM0_REGISTER SHL 8) OR 3Fh
 	call	WRITE_REGISTER
 
+	;; Patter Match Mask Byte 1
+	mov		ah,BANK1
+	call	SET_CONTROLLER_BANK
 	mov		ax,(EPMM1_REGISTER SHL 8) OR 30h
 	call	WRITE_REGISTER
 
-	mov		ax,(EPMCSH_REGISTER SHL 8) OR 0F7h
-	call	WRITE_REGISTER
-
-	mov		ax,(EPMCSL_REGISTER SHL 8) OR 0F9h
-	call	WRITE_REGISTER
-	pop		ax
-	ret
+	;; Pattern match checksum
+	;mov		ax,(EPMCSH_REGISTER SHL 8) OR 0F7h
+	;call	WRITE_REGISTER
+	;mov		ax,(EPMCSL_REGISTER SHL 8) OR 0F9h
+	;call	WRITE_REGISTER
+	mov		ah,BANK1
+	call	SET_CONTROLLER_BANK
+	mov		ax,(EPMCSH_REGISTER SHL 8) OR EPMCSL_REGISTER
+	mov		bx,(0F7h SHL 8) OR 0F9h
+	call	WRITE_REGISTER_LOW_HIGH
+	
+	pop		bx
+	ret		
 SETUP_CONTROLLER_FILTERS ENDP
 
-SETUP_CONTROLLER_MAC PROC NEAR
-	push	ax
-	push	bx
-	mov		ah,BANK2
-	call	SET_CONTROLLER_BANK 
+VERIFY_CONTROLLER_FILTERS PROC NEAR
+IF DEBUG_VERIFY_FILTER
+	jmp		VERIFY_CONTROLLER_FILTERS_T
+	debug_str_ERXFCON db "ERXFCON$" ; BANK1
+	debug_str_EPMM0 db "EPMM0$" ; BANK1
+	debug_str_EPMM1 db "EPMM1$" ; BANK1
+	debug_str_EPMCS db "EPMCS$"	; BANK1
+VERIFY_CONTROLLER_FILTERS_T:
+	mov		ah,BANK1
+	call	SET_CONTROLLER_BANK
+	mov		ah,ERXFCON_REGISTER
+	call	READ_ETH_REGISTER
+	mov		ah,al
+	UTILM_PRINT_BREG debug_str_ERXFCON,ax
+	UTILM_PRINT_NEWLINE	
+
+	mov		ah,BANK1
+	call	SET_CONTROLLER_BANK
+	mov		ah,EPMM0_REGISTER
+	call	READ_ETH_REGISTER
+	mov		ah,al
+	UTILM_PRINT_BREG debug_str_EPMM0,ax
+	UTILM_PRINT_NEWLINE
 	
-	;1. Set MACON1 to enable MAC (MACON1_MARXEN_SET|MACON1_TXPAUS_UNSET|MACON1_RXPAUS_UNSET),
+	mov		ah,BANK1
+	call	SET_CONTROLLER_BANK
+	mov		ah,EPMM1_REGISTER
+	call	READ_ETH_REGISTER
+	mov		ah,al
+	UTILM_PRINT_BREG debug_str_EPMM1,ax
+	UTILM_PRINT_NEWLINE
+	
+	mov		ah,BANK1
+	call	SET_CONTROLLER_BANK
+	mov		ax,(EPMCSH_REGISTER SHL 8) OR EPMCSL_REGISTER
+	call	READ_ETH_REGISTER_LOW_HIGH
+	UTILM_PRINT_WREG debug_str_EPMCS,ax
+	UTILM_PRINT_NEWLINE
+ENDIF
+	ret
+VERIFY_CONTROLLER_FILTERS ENDP
+
+;!! PROC
+;!!		SETUP_CONTROLLER_MODE
+;!! Input
+;!!		NONE
+;!! Output
+;!!		NONE (sets up the controller memory buffer pointers)
+;!! Uses directly
+;!!		AX, flags
+;!! Calls
+;!!		BIT_FIELD_SET (destroys AX, DX, flags)
+;!! Dependencies destroy
+;!!		AX, DX, flags
+;!! Directly preserves
+;!!		NONE
+;!! Total destroy
+;!!		AX, DX, flags
+SETUP_CONTROLLER_MODE PROC NEAR
+	jmp		SETUP_CONTROLLER_MODE_EXIT ; default has AUTOINC set by default
+	;	ECON2_REGISTER (Any Bank) 
+	mov		ax,(ECON2_REGISTER SHL 8) OR ECON2_AUTOINC_BIT
+	call	BIT_FIELD_SET
+SETUP_CONTROLLER_MODE_EXIT:
+	ret
+SETUP_CONTROLLER_MODE ENDP
+
+VERIFY_CONTROLLER_MODE PROC NEAR
+IF DEBUG_VERIFY_MODE
+	jmp		VERIFY_CONTROLLER_MODE_T
+	debug_str_ECON2 db "ECON2$" ; ANY BANK
+VERIFY_CONTROLLER_MODE_T:
+	mov		ah,ECON2_REGISTER
+	call	READ_ETH_REGISTER
+	mov		ah,al
+	UTILM_PRINT_BREG debug_str_ECON2,ax
+	UTILM_PRINT_NEWLINE	
+ENDIF	
+	ret
+VERIFY_CONTROLLER_MODE ENDP
+
+
+SETUP_CONTROLLER_MAC PROC NEAR
+	push	bx
+	
+	;0.) Set BANK to 2 for next ops
+	mov		ah,BANK2
+	call	SET_CONTROLLER_BANK
+		
+	;1. Set MACON1_REGISTER (BANK2) to enable MAC:
+	; (MACON1_MARXEN_SET|MACON1_TXPAUS_UNSET|MACON1_RXPAUS_UNSET),
 	;	half-duplex mode
 	mov		ax,(MACON1_REGISTER SHL 8) OR MACON1_MARXEN_SET OR MACON1_TXPAUS_UNSET OR MACON1_RXPAUS_UNSET
 	call	WRITE_REGISTER
 	
-	;2. Set MACON3 register (MACON3_PADCFG2_SET|MACON3_PADCFG1_SET|MACON3_PADCFG0_SET|MACON3_TXCRCEN_SET
+	;2. Set MACON3_REGISTER (Bank 2)
+	; (MACON3_PADCFG2_SET|MACON3_PADCFG1_SET|MACON3_PADCFG0_SET|MACON3_TXCRCEN_SET
 	;|MACON3_FULDPX_UNSET)
 	; Line limits...splitting in two
 	MACON_3_OR1 EQU MACON3_PADCFG2_SET OR MACON3_PADCFG1_SET OR MACON3_PADCFG0_SET
 	MACON_3_OR2 EQU MACON3_TXCRCEN_SET OR MACON3_FULDPX_UNSET
 	mov		ax,(MACON3_REGISTER SHL 8) OR MACON_3_OR1 OR MACON_3_OR2
 	call	WRITE_REGISTER
-		
-	;3.) Set MACON4 (MACON4_DEFER_SET)
+	
+	;3.) Set MACON4_REGISTER (BANK2) (MACON4_DEFER_SET)
 	mov		ax,(MACON4_REGISTER SHL 8) OR MACON4_DEFER_SET
 	call	WRITE_REGISTER
 	
-	; 4.) Set MAMXFLL & MAMXFLH
+	; 4.) Set MAMXFLL_REGISTER & MAMXFLH_REGISTER (BANK2)
 	mov		ax,(MAMXFLH_REGISTER SHL 8) OR MAMXFLL_REGISTER
 	mov		bx,MAX_FRAME_LENGTH
 	call	WRITE_REGISTER_LOW_HIGH
 	
-	;5.) Set MABBIPG Back-to-Back inter-packet gap
+	;5.) Set MABBIPG_REGISTER (BANK2) Back-to-Back inter-packet gap
 	mov		ax,(MABBIPG_REGISTER SHL 8) OR B2BINTERPACKETGAP
 	call	WRITE_REGISTER
 
-		;6/7.) Configure Non-Back-to-Back Inter-Packet Gap low byte + high byte
+	;6/7.) Configure Non-Back-to-Back Inter-Packet Gap low byte + high byte
 	mov		ax,(MAIPGH_REGISTER SHL 8) OR MAIPGL_REGISTER
 	mov		bx,NB2BINTERPACKETGAP
 	call	WRITE_REGISTER_LOW_HIGH
 	
-;- Will use default reset values for now
-;  Serial.println("8.) Program Retransmission and Collision window registers (MACLCON1 & 2)");
-;  Serial.println("Setting MACLCON1 (Retransmission window)");
-;  Serial.println("Setting MACLCON2 - Collision window");
-;  
+	;; Set MAADR1_REGISTER-MAADR6_REGISTER (BANK 3)
+	; MAC Address 0-5
 	mov		ah,BANK3
 	call	SET_CONTROLLER_BANK 
 	
-	;; Set MAC Address 0-5
 	mov		ah,MAADR1_REGISTER
 	mov		al,MAC_ADDRESS_TABLE[0] ;; PROVIDED BY PKT_DRIVER!!
 	call	WRITE_REGISTER
@@ -1403,10 +1527,26 @@ SETUP_CONTROLLER_MAC PROC NEAR
 	mov		ah,MAADR6_REGISTER
 	mov		al,MAC_ADDRESS_TABLE[5]
 	call	WRITE_REGISTER
+	
+	;- Will use default reset values for now
+;  Serial.println("8.) Program Retransmission and Collision window registers (MACLCON1 & 2)");
+;  Serial.println("Setting MACLCON1 (Retransmission window)");
+;  Serial.println("Setting MACLCON2 - Collision window");
+;  
 	pop		bx
-	pop		ax
 	ret
 SETUP_CONTROLLER_MAC ENDP
+
+VERIFY_CONTROLLER_MAC PROC NEAR
+IF DEBUG_VERIFY_MODE
+	jmp		VERIFY_CONTROLLER_MAC_T
+	debug_str_MACON1 db "MACON1_REGISTER$" ; BANK2, MAC/MII
+	debug_str_MACON3 db "MACON3_REGISTER$" ; BANK2, MAC/MII
+	debug_str_MACON4 db "MACON4_REGISTER$" ; BANK2, MAC/MII
+VERIFY_CONTROLLER_MAC_T:
+ENDIF
+	ret
+VERIFY_CONTROLLER_MAC ENDP
 
 SETUP_CONTROLLER_PHY PROC NEAR
 ;; TODO - pick up here, also implement PHY read/write
@@ -1486,9 +1626,19 @@ TXRXH_INIT PROC NEAR ;; USED TO BE TXRXH_RESET
 TXRXH_INIT ENDP
 
 HAL_INIT PROC NEAR
-	call	TXRX_SOFT_RESET ; 1
-	call	SETUP_CONTROLLER_BUFFERS ;2a
-	call	VERIFY_CONTROLLER_BUFFERS ;2b
+	call	TXRX_SOFT_RESET
+	call	SETUP_CONTROLLER_BUFFERS
+	call	VERIFY_CONTROLLER_BUFFERS
+	call	SETUP_CONTROLLER_FILTERS
+	call	VERIFY_CONTROLLER_FILTERS
+	call	SETUP_CONTROLLER_MODE ; Not necessary since ECON2 is already in autoinc
+	call	VERIFY_CONTROLLER_MODE
+	call	SETUP_CONTROLLER_MAC
+	call	VERIFY_CONTROLLER_MAC
+	;call	SETUP_CONTROLLER_PHY
+	;call	VERIFY_CONTROLLER_PHY
+	;call	SETUP_CONTROLLER_INT
+	;call	TXRX_ENABLE_RX ; enable receiving
 	ret
 HAL_INIT ENDP
 
