@@ -17,6 +17,15 @@ int_dos_21							EQU	21h
 		val_dos_terminate_00				EQU 00h
 		val_dos_terminate_01				EQU 01h ; error
 int_default_pkt_driver				EQU 60h
+int_modem					EQU 0Ch ; Interrupt for the modem port, IRQ 4
+	int_modem_offset			EQU int_modem * 4
+	int_modem_segment			EQU int_modem_offset + 2
+
+;; PIC 
+	port_pic_cmd				EQU 20h ; 8259A PIC Command port
+	port_pic_data				EQU 21h ; 8259A PIC data port
+		val_pic_eoi					EQU 20h ; 8259A PIC "End of Interrupt" value
+	mask_modem_bit				EQU	10h; xxx1 xxxx; (to enable, invert + AND -> 1110 1111)
 
 ; PSP Offsets
 		val_dos_env_offset_2C				EQU 2Ch

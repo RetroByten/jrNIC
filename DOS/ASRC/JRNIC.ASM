@@ -41,6 +41,7 @@ DEBUG_TEST8 EQU 0 ; CORE COMMANDS:
 DEBUG_VERIFY_BUFFER EQU 0 ; Verify Controller buffers					
 DEBUG_VERIFY_FILTER EQU 1 ; Verify Controller filters
 DEBUG_VERIFY_MODE EQU 1 ; Verify Controller Mode
+DEBUG_VERIFY_PHY EQU 1 ; Verify Controller Physical Interface
 ;;;;;; TODO - fix debug function
 
 IF ROM
@@ -206,8 +207,82 @@ PKT_DRVR_CORE_EXECUTE: ;; CAN'T BE A CALL BECAUSE OF SI RECOVERY
 	DEBUG_PARA_ALIGN_MACRO
 PKT_DRVR_CORE ENDP
 
+; return carry clear if not already masked
+; return carry set if already masked
+FORCE_MASK_IRQ_CHECK PROC NEAR
+	push	ax
+	in		al,port_pic_data
+	mov		ah,al ; save copy
+	or		al,mask_modem_bit
+	out		port_pic_data,al ; unconditionally mask, a
+	test	ah,mask_modem_bit ; check if interrupt was already masked
+	jz		FORCE_MASK_IRQ_CHECK_N ; if 0, it was unmasked
+	stc		; was masked, aka inactive, aka 1
+	jmp		FORCE_MASK_IRQ_CHECK_D
+FORCE_MASK_IRQ_CHECK_N:	
+	clc		; was unmasked, aka active, aka 0
+FORCE_MASK_IRQ_CHECK_D:
+	pop		ax
+	ret
+FORCE_MASK_IRQ_CHECK ENDP
+
+MASK_IRQ4 PROC NEAR
+	push	ax
+	in		al,port_pic_data
+	or		al,mask_modem_bit ; 0001 0000 setup mask 
+	out		port_pic_data,al
+	pop		ax
+	ret
+MASK_IRQ4 ENDP
+
+UNMASK_IRQ4 PROC NEAR
+	push	ax
+	in		al,port_pic_data
+	and		al,NOT mask_modem_bit ; 1110 1111 setup mask clear
+	out		port_pic_data,al ; write interrupt controller mask reg to unmask modem
+	pop		ax
+	ret
+UNMASK_IRQ4 ENDP
+
+ACK_IRQ PROC NEAR
+	push	ax
+	mov		al,val_pic_eoi
+	out		port_pic_cmd,al ; Ack hardware Interrupt
+	pop		ax
+	ret
+ACK_IRQ ENDP
+
+debug_str_int_called db "Interrupt!$"
 PKT_DRIVER_RECV_DEFAULT PROC FAR
 	; TODO - clear received packets
+	; CONDITIONALLY MASK IRQ4
+	call	FORCE_MASK_IRQ_CHECK ; Make sure nothing was using it already
+	jc		PKT_DRIVER_RECV_DEFAULT_T ; If it was in use, bail
+	
+	;; DO YOUR THING
+	UTILM_PRINT_STR debug_str_int_called
+	
+	
+	;;;;;; TODO - need to work out interrupt logic
+	; 1.) PCjr interrupt is now disabled
+	; 2.) HAL_RX ; 
+	;     0.) Disable receiving - clear ECON1_RXEN
+	;     1.) Clear global interrupt bit (lifts hw interrupt flag)
+	;   X - Receiving packets - Page 43 (section 7.2)  
+	;	2.) Int: Page 63 (Section 12)
+	;     xxxx read packet bytes
+	;     xxxx decrement epktcnt until 0
+	;     xxxx reset hardware pointer
+	;; Unmask the hardware interrupt
+	call	UNMASK_IRQ4
+	
+PKT_DRIVER_RECV_DEFAULT_T:
+	;call	ACK_IRQ
+	;; Ack PCjr IRQ
+	push	ax
+	mov		al,val_pic_eoi
+	out		port_pic_cmd,al ; Ack hardware Interrupt
+	pop		ax ; can't disturb registers in a HW interrupt
 	iret
 PKT_DRIVER_RECV_DEFAULT ENDP
 
@@ -226,17 +301,14 @@ INIT PROC FAR 	; BIOS enters, TODO
 IF DEBUG
 	UTILM_PRINT_STRN debug_txrx_reset
 ENDIF
-	;; TODO - ensure interrupt is disabled, reset the card
-	call	TXRX_SOFT_RESET ; Reset the card
-;	UTILM_DELAY_ITER 20h
-	;; Clear internal card Memory
-	call	TXRX_CLEAR_MEMORY
+	call	DISABLE_HARDWARE_INT
+	call	HAL_RESET ; Reset the card
 
 	ret ; Far Return
 	DEBUG_PARA_ALIGN_MACRO
 INIT ENDP
 INITDOS PROC FAR
-	push	cs ; setup far return
+	push	cs ; setup segment for correct far return from near call
 	call	NEAR PTR INIT
 	mov		ax,(svc_dos_terminate_4C SHL 8) OR val_dos_terminate_00
 	int		int_dos_21
@@ -494,12 +566,54 @@ DEBUG_PRINT_PROC PROC NEAR
 	ret
 DEBUG_PRINT_PROC ENDP
 
+DISABLE_HARDWARE_INT PROC NEAR
+	call MASK_IRQ4
+	ret
+DISABLE_HARDWARE_INT ENDP
+
+SETUP_DEFAULT_HARDWARE_INT PROC NEAR
+	push	es
+	push	ds ; preserve
+	
+	; Set DS to CS
+	mov		ax,cs
+	mov		ds,ax 
+	
+	 ; Set ES to interrupt vector table
+	mov		ax,interrupt_vector_table_segment
+	mov		es,ax
+	
+	; Set HW interrupt vector to point to internal vector
+	mov		ax,offset PKT_DRIVER_RECV_DEFAULT
+	mov		es:[int_modem_offset],ax
+	mov		ax,cs
+	mov		es:[int_modem_segment],ax
+	
+	pop		ds ; restore
+	pop		es
+
+	ret
+SETUP_DEFAULT_HARDWARE_INT ENDP
+
+ENABLE_HARDWARE_INT PROC NEAR
+	call	UNMASK_IRQ4
+	ret
+ENABLE_HARDWARE_INT ENDP
+
 debug_str_init_adapter db "Initializing Adapter...$"
 debug_str_todo db "TODO: HAL_INIT -> next parts$"
 INIT_ADAPTER PROC NEAR
+	; Call HAL_INIT to initalize card
+	; then setup PCjr default HW RX interrupt
+	; then enable PCjr HW RX interrupt
+	; then enable HAL_ENABLE_RX
 	UTILM_PRINT_STRN debug_str_init_adapter
-	call	HAL_INIT
-	UTILM_PRINT_STRN debug_str_todo
+	call	DISABLE_HARDWARE_INT
+	call	SETUP_DEFAULT_HARDWARE_INT
+	call	ENABLE_HARDWARE_INT
+	call	HAL_INIT ; Initialize the card
+	call	HAL_ENABLE_RX
+	
 	ret
 INIT_ADAPTER ENDP
 
@@ -558,7 +672,6 @@ CHECK_IF_ALREADY_LOADED:
 	jc		UNLOAD ; Was loaded, need to unload
 LOAD: ; 2a.)  Need to load ourselves and then TSR
 	call	LOAD_RESIDENT_TSR
-	call	INIT_HW_RECV_INT
 	call	INIT_ADAPTER
 EXITTSR: ; Terminate, free up additional memory
 	; DS is already PSP
@@ -582,7 +695,8 @@ debug_txrx_actual db "Actual$"
 debug_txrx_test db "Test$"
 debug_txrx_complete db "Complete$"
 ;;;;;
-;; TEST CART - used to debug the HAL
+;; TEST CART - used to debug the low level functions
+;; - Technically violates the HAL
 ;;;;;
 DEBUG_PARA_ALIGN_MACRO
 TESTCART PROC NEAR
