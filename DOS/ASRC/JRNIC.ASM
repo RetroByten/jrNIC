@@ -141,25 +141,32 @@ PKT_INT_SHIM_ENTRY:
 	PKT_DRIVER_SIGNATURE_MACRO
 	PROGRAM_SIGNATURE_MACRO
 PKT_INT_SHIM_CONT:
-	sti ; Re-enable interrupts
-	push	bp	; Use BP to pass PSP/MEM because we won't use caller's BP but need
+	push	bp ; Preserve caller's BP on caller's stack
+	mov		bp,cs ; Give real PKT_INT the MEMORYSHIMBEGIN segment
+	PKT_INT_SHIM_CALL:
+	jmp		FAR PTR PLACEHOLDER_JMP ; dummy, replaced at runtime with CS:PKT_DRV_CORE
+;;;;;;;;;
+
+
+;	sti ; Re-enable interrupts
+;	push	bp	; Use BP to pass PSP/MEM because we won't use caller's BP but need
 				; Most of the rest of the caller's args
-	mov		bp,cs ; Pass resident PSP/Mem to function
-	PKT_INT_SHIM_CALL: ; For fixing the absolute call
-	call	FAR PTR PLACEHOLDER_JMP ; dummy, replaced at runtime with CS:PKT_DRV_CORE, sets/clears carry
-	PKT_INT_SHIM_COMPLETE:
-	mov		bp,sp ; Get current stack pointer, should have nothing but BP + OFFSET + SEG + FLAGS
+;	mov		bp,cs ; Pass resident PSP/Mem to function
+;	PKT_INT_SHIM_CALL: ; For fixing the absolute call
+;	call	FAR PTR PLACEHOLDER_JMP ; dummy, replaced at runtime with CS:PKT_DRV_CORE, sets/clears carry
+;	PKT_INT_SHIM_COMPLETE:
+;	mov		bp,sp ; Get current stack pointer, should have nothing but BP + OFFSET + SEG + FLAGS
 				  ;                                                    0    2        4     6
-	jc		SHORT PKT_INT_SHIM_RET_GOOD
-PKT_INT_SHIM_RET_GOOD: ; Clear carry flag on stack
-	and		BYTE PTR [bp+6],0FEh ; SS:
-	pop		bp
-	iret
+;	jc		SHORT PKT_INT_SHIM_RET_GOOD
+;PKT_INT_SHIM_RET_GOOD: ; Clear carry flag on stack
+;	and		BYTE PTR [bp+6],0FEh ; SS:
+;	pop		bp
+;	iret
 	;jmp		SHORT RET_DONE
-PKT_INT_SHIM_BAD: ; Set carry flag on stack
-	or		BYTE PTR [bp+6],01h ; SS:
-	pop		bp
-	iret
+;PKT_INT_SHIM_BAD: ; Set carry flag on stack
+;	or		BYTE PTR [bp+6],01h ; SS:
+;	pop		bp
+;	iret
 ;;; - PKT RCV IRQ ENTRY
 RCV_INT_SHIM_ENTRY:  ;; Can't call any cartridge fuctions directly because they'd be 
 						; near cartridge calls and we're far away in RAM
@@ -192,6 +199,7 @@ MEMORY_DATA_RECEIVERS:
 	int_pkt_driver				db int_default_pkt_driver ; Dummy
 	;PACKET_BUFFER_SIZE EQU TX_ADDRESS_END - TX_ADDRESS_START + 1
 	PACKET_BUFFER_SIZE			EQU 5ffh
+	pkt_available_handle		db 00h
 	pkt_mem_buffer				db PACKET_BUFFER_SIZE dup(00h)
 MAC_ADDRESS_TABLE LABEL BYTE
 	db 00h, 03h, 01h, 04h, 01h, 05h ; Default made up source MAC address
@@ -239,13 +247,16 @@ CDEBUG PROC FAR
 CDEBUG ENDP
 
 PAGE
+;; All services must POP SI immediately
+;; BP = current MEMORYSHIMBEGIN SEGMENT
+;; MUST 
 SVC_00 PROC FAR ;; driver_error
-	pop		si
+	pop		si ; Restore caller's si
 	mov		dh,LOW BAD_COMMAND
-	stc
-	ret ; Far Return
+	stc			; Indicate error condition
+	jmp NEAR PTR SVC_CLEANUP
 SVC_00 ENDP
-SVC_01 PROC FAR ;; driver_info
+SVC_01 PROC FAR ;; driver_info pkt_available_handle
 	pop		si
 	
 	push	ax ; store AH
@@ -260,15 +271,38 @@ SVC_01 PROC FAR ;; driver_info
 	mov		al,DRV_FUNC
 	
 	clc
-	ret ; Far Return
+	jmp NEAR PTR SVC_CLEANUP
 SVC_01 ENDP
 SVC_02 PROC FAR ;; access_type
 	pop		si
-	;;;
+	
+	;; TODO 2 - check they're asking for typlen = 0 aka all for now
+	
+	;; Check if any handles are available
+	;; If yes, return BX = actual offset
+	;;		and fill in appropriate value
+	;; If no, return carry set
+	
+	;;; TODO, NOW WE SUPPORT MORE HANDLES, STOP HARDCODING
 	mov		ax,0001h; always return handle 1
-	clc
-	ret ; Far Return
+	clc		; Indicate success
+	jmp NEAR PTR SVC_CLEANUP
 SVC_02 ENDP
+SVC_CLEANUP PROC FAR ;; Assumes all regs restored except bp
+				  ;; Need to set IRET carry and then IRET
+	mov		bp,sp ; Get current stack pointer, should have nothing but BP + OFFSET + SEG + FLAGS
+				  ;     
+	jc		SHORT SVC_IRET_BAD
+SVC_IRET_GOOD: ; Clear carry flag on stack
+	and		BYTE PTR [bp+6],0FEh ; SS:
+	pop		bp
+	iret
+SVC_IRET_BAD: ; Set carry flag on stack
+	or		BYTE PTR [bp+6],01h ; SS:
+	pop		bp
+	iret
+SVC_CLEANUP ENP
+
 
 PAGE
 DEBUG_PARA_ALIGN_MACRO
@@ -282,20 +316,20 @@ PKT_INT_MAIN PROC FAR
 	;; BP = RESIDENT MEMORY SEGMENT IF NEEDED TO STORE / SWAP STACK FRAME
 	;; CAN'T CHANGE STACK UNLESS YOU CHECK IF RECV INTERRUPT IS UNMASKED
 	;; TO ENSURE ONLY 1 COPY OF THIS IS RUNNING!!!
-	
-	;; Calculate command offset
+	; BP contains MEMOERYSHIM SEGMENT, MUST PRESERVE ALL REGISTERS EXCEPT FLAGS, return carry
+	sti ; Re-enable interrupts
 	push	si ; Save SI, used for temporary offset
-	push	ax
-	mov		al,ah ; al=SVC
-	xor		ah,ah ; ah=0
-	sal		ax,1 ; SVC*2 = INT_SVC_TABLE entry
+	push	ax ; Save caller's AL
+	mov		al,ah ; AH was SVC, move to al
+	xor		ah,ah ; AH = 0
+	sal		ax,1 ; SVC * 2 = INT_SVC_TABLE entry
 	mov		si,ax ; SI = INT_SVC_TABLE entry
-	pop		ax
+	pop		ax ; Restore caller's AL
 	cmp		si,INT_SVC_TABLE_L ; Check if command is valid
 	jb		PKT_INT_MAIN_SVC_EXE ; if yes, execute
 	xor		si,si ; if no, force invalid command entry
-PKT_INT_MAIN_SVC_EXE: ;; CAN'T BE A CALL BECAUSE OF SI RECOVERY
-	jmp		WORD PTR CS:[SI + OFFSET INT_SVC_TABLE] ; will return on it's own, must pop SI
+PKT_INT_MAIN_SVC_EXE:
+	WORD PTR CS:[SI + OFFSET INT_SVC_TABLE] ; will iret and clean stack on it's own, must pop SI
 	DEBUG_PARA_ALIGN_MACRO
 PKT_INT_MAIN ENDP
 
@@ -313,7 +347,7 @@ RCV_INT_MAIN PROC FAR ; SHIM needs to point here for RX
 	; - Must check if card is in use (for sanity)
 	; - Must clear jrNIC interrupt line (if not in use)
 	sti						; Re-enable interrupts
-	push	ds				; Preserve caller's DS
+	push	ds				; Preserve interruptee's DS
 	push	dx				; Preserve DX
 	push	bp				; Preserve BP
 	mov		ds,ax			; Set DS to MEMORYSHIMBEGIN segment
@@ -330,7 +364,7 @@ RCV_INT_MAIN PROC FAR ; SHIM needs to point here for RX
 
 ;	DO THINGS, preserve all registers used
 	call	HAL_DISABLE_RX ; Disable further reception, uses AX/DX/FLAGS
-	UTILM_PRINT_STRN debug_str_int_called
+	;UTILM_PRINT_STRN debug_str_int_called
 	
 	;; Read Packet Size, check for weird error, and save
 	call	HAL_GET_PACKET_SIZE ; get packet size into AX, uses AX/DX/FLAGS
@@ -461,12 +495,12 @@ debug_str_handle db "Handle$"
 debug_str_size db "Size$"
 debug_str_call db "Call$"
 RCV_DUMMY_RET PROC FAR
-	UTILM_PRINT_WREG debug_str_handle,bx
-	UTILM_PRINT_NEWLINE
-	UTILM_PRINT_WREG debug_str_call,ax
-	UTILM_PRINT_NEWLINE
-	UTILM_PRINT_WREG debug_str_size,cx
-	UTILM_PRINT_NEWLINE
+;	UTILM_PRINT_WREG debug_str_handle,bx
+;	UTILM_PRINT_NEWLINE
+;	UTILM_PRINT_WREG debug_str_call,ax
+;	UTILM_PRINT_NEWLINE
+;	UTILM_PRINT_WREG debug_str_size,cx
+;	UTILM_PRINT_NEWLINE
 	xor		di,di
 	mov		es,di
 	ret
