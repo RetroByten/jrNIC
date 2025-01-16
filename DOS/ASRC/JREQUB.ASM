@@ -21,12 +21,14 @@ int_modem					EQU 0Ch ; Interrupt for the modem port, IRQ 4
 	int_modem_offset			EQU int_modem * 4
 	int_modem_segment			EQU int_modem_offset + 2
 
-;; PIC 
+;; PORTS
 	port_pic_cmd				EQU 20h ; 8259A PIC Command port
-	port_pic_data				EQU 21h ; 8259A PIC data port
 		val_pic_eoi					EQU 20h ; 8259A PIC "End of Interrupt" value
-	mask_modem_bit				EQU	10h; xxx1 xxxx; (to enable, invert + AND -> 1110 1111)
-
+	port_pic_data				EQU 21h ; 8259A PIC data port
+		mask_modem_bit				EQU 00010000B ; (to enable, invert + AND -> 1110 1111)
+port_nmi_mask_reg			EQU 0A0h ; 
+	nmi_enable				EQU 10000000B ; Bit 7 = NMI
+	nmi_disable				EQU 00000000B ; Bit 7 = NMI
 ; PSP Offsets
 		val_dos_env_offset_2C				EQU 2Ch
 		val_dos_args_80h					EQU 80h
@@ -49,6 +51,9 @@ CANT_SET		EQU 13	;13	CANT_SET	Hardware address couldn't be changed
 						;			(more than 1 handle open),
 BAD_ADDRESS		EQU 14	;14	BAD_ADDRESS	Hardware address has bad length or format,
 CANT_RESET		EQU 15	;15	CANT_RESET	Couldn't reset interface (more than 1 handle open).
+
+;; NUMBER OF SUPPORTED HANDLES
+HANDLE_COUNT EQU 10 ; Per Packet Driver Spec
 
 ;; RAM Usage
 PSP_SIZE EQU 100h ; DOS 2.1 Technical Reference (p.6-5), PARA ALIGNED

@@ -110,7 +110,7 @@ UTIL_PRINT_STR_LOOP:
 	cmp		al,'$'
 	je		UTIL_PRINT_STR_DONE
 	call	UTIL_PRINT_CHAR
-	jmp		UTIL_PRINT_STR_LOOP
+	jmp		SHORT UTIL_PRINT_STR_LOOP
 UTIL_PRINT_STR_DONE:
 	mov		si,dx ; Get back SI
 	ret

@@ -17,19 +17,19 @@ ROM EQU 1 ; Set to 0 if COM, Set to 1 if ROM
 ;; Debugging options - only work in ROM
 DEBUG EQU 1 ; Set to 0 if not debugging
 DEBUG_TEST1 EQU 0 ; CORE COMMANDS: 
-					; RESET
-					; READ_ETH
-					; WRITE_REG
+					; HW_RESET
+					; HW_READ_ETH_REGISTER
+					; HW_WRITE_REGISTER
 DEBUG_TEST2 EQU 0 ; CORE COMMANDS: 
-					; BIT_FIELD_SET
-					; BIT_FIELD_CLEAR
+					; HW_BIT_FIELD_SET
+					; HW_BIT_FIELD_CLEAR
 DEBUG_TEST3 EQU 0 ; SUPPORT COMMANDS: 
-					; GET_CONTROLLER_BANK
-					; SET_CONTROLLER_BANK
+					; HW_GET_CONTROLLER_BANK
+					; HW_SET_CONTROLLER_BANK
 DEBUG_TEST4 EQU 0 ; COMPOUND COMMANDS: 
-					; WRITE_REGISTER_LOW_HIGH
-					; READ_ETH_REGISTER_LOW_HIGH
-DEBUG_TEST5 EQU 0	; SUPPORT COMMANDS: SET_ERDPT, SET_EWRPT
+					; HW_WRITE_REGISTER_LOW_HIGH
+					; HW_READ_ETH_REGISTER_LOW_HIGH
+DEBUG_TEST5 EQU 0	; SUPPORT COMMANDS: HW_SET_ERDPT, HW_SET_EWRPT
 DEBUG_TEST6 EQU 0 ; CORE COMMANDS: 
 					; READ/WRITE BUFFER MEMORY BYTE
 					; READ/WRITE BUFFER MEMORY WORD
@@ -39,9 +39,9 @@ DEBUG_TEST8 EQU 0 ; CORE COMMANDS:
 					; READ/WRITE PHY Register
 
 DEBUG_VERIFY_BUFFER EQU 0 ; Verify Controller buffers					
-DEBUG_VERIFY_FILTER EQU 1 ; Verify Controller filters
-DEBUG_VERIFY_MODE EQU 1 ; Verify Controller Mode
-DEBUG_VERIFY_PHY EQU 1 ; Verify Controller Physical Interface
+DEBUG_VERIFY_FILTER EQU 0 ; Verify Controller filters
+DEBUG_VERIFY_MODE EQU 0 ; Verify Controller Mode
+DEBUG_VERIFY_PHY EQU 0 ; Verify Controller Physical Interface
 ;;;;;; TODO - fix debug function
 
 IF ROM
@@ -57,6 +57,35 @@ INCLUDE JREQUB.ASM ; These are statically known up-front
 PAGE
 %OUT Processing jrNIC Macros
 INCLUDE JRMACROS.ASM
+
+; Input: None
+; Output: 
+;	jz, zero flag set (1) if interrupt was unmasked (Active,0)
+;	jnz, zero flag clear (0) if interrupt was masked (card in use,1)
+; Destroys AH, Flags
+FORCE_MASK_IRQ_CHECKM MACRO
+	in		al,port_pic_data	; Read current IRQ masks
+	mov		ah,al				; Save current IRQ masks
+	or		al,mask_modem_bit	; Unconditionally mask (if it's already masked its no loss)
+	test	ah,mask_modem_bit	; Check if saved IRQ masks has modem masked
+ENDM
+
+MASK_IRQ4M MACRO
+	in		al,port_pic_data
+	or		al,mask_modem_bit ; 0001 0000 mask IRQ off
+	out		port_pic_data,al
+ENDM
+
+UNMASK_IRQ4M MACRO
+	in		al,port_pic_data
+	and		al,NOT mask_modem_bit ; 1110 1111 clear/activate IRQ
+	out		port_pic_data,al ; write interrupt controller mask reg to unmask modem
+ENDM
+
+ACK_IRQM MACRO
+	mov		al,val_pic_eoi		; Unconditionally ACK hardware Interrupt
+	out		port_pic_cmd,al
+ENDM
 
 PAGE
 SHIMSEG SEGMENT AT 0h ; Memory resident at end of PSP
@@ -89,6 +118,10 @@ IF DEBUG ;; DEBUGGING TEST FUNCTION
 	DOSCMD3S	db "CJRNICT"					; DOS Command3 name string
 	DOSCMD3E:									; End of Command3 name string
 	jmp			NEAR PTR TESTCART				;; DOS Command3 Entry Point
+	DOSCMD4L	db DOSCMD4E - DOSCMD4S			; Length of DOS Command4 name
+	DOSCMD4S	db "CDEBUG"						; DOS Command4 name string
+	DOSCMD4E:									; End of Command4 name string
+	jmp			NEAR PTR CDEBUG					;; DOS Command4 Entry Point
 ENDIF
 	CARTEOH		db 00h							; End of cartridge header
 	;; TODO - Currently wasted space :(
@@ -100,37 +133,66 @@ ELSE 	;; DOS COM Entry
 	jmp			NEAR PTR MAIN				; DOS Command Entry Point
 ENDIF
 
-PAGE
-MEMORYSHIMBEGIN: ; For ROM, will be copied into RAM at end of PSP
-	jmp		NEAR PTR SHIM_INT_ENTRY ; Near ptr for alignment and PKT DRVR SPEC
+PAGE ;; Memory SHIM
+MEMORYSHIMBEGIN: ; For ROM runs, this will be copied into RAM at end of PSP
+;;; - PKT INT API ENTRY
+PKT_INT_SHIM_ENTRY:
+	jmp		NEAR PTR PKT_INT_SHIM_CONT ; Near ptr for alignment and PKT DRVR SPEC
 	PKT_DRIVER_SIGNATURE_MACRO
 	PROGRAM_SIGNATURE_MACRO
-	SHIM_INT_ENTRY:
+PKT_INT_SHIM_CONT:
 	sti ; Re-enable interrupts
-	push	bp
+	push	bp	; Use BP to pass PSP/MEM because we won't use caller's BP but need
+				; Most of the rest of the caller's args
 	mov		bp,cs ; Pass resident PSP/Mem to function
-	SHIM_INT_CALL: ; For fixing the absolute call
+	PKT_INT_SHIM_CALL: ; For fixing the absolute call
 	call	FAR PTR PLACEHOLDER_JMP ; dummy, replaced at runtime with CS:PKT_DRV_CORE, sets/clears carry
-	SHIM_INT_COMPLETE:
+	PKT_INT_SHIM_COMPLETE:
 	mov		bp,sp ; Get current stack pointer, should have nothing but BP + OFFSET + SEG + FLAGS
 				  ;                                                    0    2        4     6
-	jc		SHORT RET_BAD
-RET_GOOD: ; Clear carry flag on stack
+	jc		SHORT PKT_INT_SHIM_RET_GOOD
+PKT_INT_SHIM_RET_GOOD: ; Clear carry flag on stack
 	and		BYTE PTR [bp+6],0FEh ; SS:
-	jmp		SHORT RET_DONE
-RET_BAD: ; Set carry flag on stack
-	or		BYTE PTR [bp+6],01h ; SS:
-RET_DONE:
 	pop		bp
 	iret
+	;jmp		SHORT RET_DONE
+PKT_INT_SHIM_BAD: ; Set carry flag on stack
+	or		BYTE PTR [bp+6],01h ; SS:
+	pop		bp
+	iret
+;;; - PKT RCV IRQ ENTRY
+RCV_INT_SHIM_ENTRY:  ;; Can't call any cartridge fuctions directly because they'd be 
+						; near cartridge calls and we're far away in RAM
+	;; Preserve ALL registers except flags because we are an IRQ!
+	;; Do as little as possible here because we're possibly in slow RAM
+	;; Save actual work for 
+	push	ax				; 1.) Preserve interuptee's AX on interuptee's stack
+	mov		ax,cs			; 2.) Give real IRQ the MEMORYSHIMBEGIN segment
+	RCV_INT_SHIM_CALL: 
+	jmp		FAR PTR PLACEHOLDER_JMP ; dummy placeholder, replaced at runtime with CS:RCV_INT_MAIN
+									; - Must pop AX and iret when complete
+									; - Must ACK PIC IRQ (unconditionally)
+									; - Must check if card is in use (for sanity)
+									; - Must clear jrNIC interrupt line (if not in use)
+;	call	FAR PTR PLACEHOLDER_JMP ; dummy	; Replaced at runtime with CS:RCV_INT_MAIN
+											; at runtime
+											; Must check if card is in use
+											; Must clear jrNIC interrupt line (if owns card)
+											; and ACK PIC IRQ (unconditionally)
+;	pop		ax ; Restore interuptee's AX from interuptee's stack
+;	iret
 MEMORY_DATA_OFFSET:
 	orig_int_offset 			dw 0FEC0h ; Dummy
 	orig_int_segment 			dw 0EFBEh ; Dummy
 	orig_recv_offset 			dw 0DDDDh ; Dummy
 	orig_recv_segment 			dw 0CCCCh ; Dummy
-	caller_stack_offset 		dw 0BBBBh ; Dummy
-	caller_stack_segment 		dw 0AAAAh ; Dummy
+MEMORY_DATA_RECEIVERS:
+	receiver_call_ptrs			dd HANDLE_COUNT dup(0FFFFFFFFh); 4 bytes per entry
+	packet_size					dw 0000h ; Dummy
 	int_pkt_driver				db int_default_pkt_driver ; Dummy
+	;PACKET_BUFFER_SIZE EQU TX_ADDRESS_END - TX_ADDRESS_START + 1
+	PACKET_BUFFER_SIZE			EQU 5ffh
+	pkt_mem_buffer				db PACKET_BUFFER_SIZE dup(00h)
 MAC_ADDRESS_TABLE LABEL BYTE
 	db 00h, 03h, 01h, 04h, 01h, 05h ; Default made up source MAC address
 MAC_ADDRESS_TABLE_L EQU $-MAC_ADDRESS_TABLE
@@ -140,11 +202,41 @@ MAC_ADDRESS_TABLE_L EQU $-MAC_ADDRESS_TABLE
 		allow_unload_env		db 1h
 	ENDIF
 	PARA_ALIGN_MACRO ;; Necessary for both paragraph reservation and MOVSW
-MEMORYSHIMEND:
+MEMORYSHIMEND: 	
+;;; TODO - move pkt_ram_buffer out of the SHIM definition since they can be done by malloc
 
 PAGE
 %OUT Processing JRNICHAL
 INCLUDE JRNICHAL.ASM
+
+PAGE
+debug_recv_seg db "Receive Segment$"
+debug_recv_off db "Receive Offset$"
+debug_str_mask db "Mask$"
+CDEBUG PROC FAR
+	mov		ax,cs
+	mov		ds,ax
+	;; Print Receive IRQ
+	mov		ah,svc_dos_get_interrupt_35
+	mov		al,int_modem
+	int		int_dos_21					; Set MODEM (RECV) Interrupt
+	;; sets ES:BX
+	UTILM_PRINT_WREG debug_recv_seg,es
+	UTILM_PRINT_COLON
+	UTILM_PRINT_WREG debug_recv_off,bx
+	UTILM_PRINT_NEWLINE
+	
+	;; Print Mask
+	in		al,port_pic_data
+	mov		ah,al
+	UTILM_PRINT_BREG debug_str_mask,ax
+	UTILM_PRINT_NEWLINE
+
+	EXITCLEAND:
+	mov		ax,(svc_dos_terminate_4C SHL 8) OR val_dos_terminate_00
+	int		int_dos_21
+	DEBUG_PARA_ALIGN_MACRO
+CDEBUG ENDP
 
 PAGE
 SVC_00 PROC FAR ;; driver_error
@@ -186,7 +278,7 @@ INT_SVC_TABLE LABEL WORD
 	dw		OFFSET SVC_02 ; access_type
 INT_SVC_TABLE_L EQU $-INT_SVC_TABLE ; Length of table
 
-PKT_DRVR_CORE PROC FAR
+PKT_INT_MAIN PROC FAR
 	;; BP = RESIDENT MEMORY SEGMENT IF NEEDED TO STORE / SWAP STACK FRAME
 	;; CAN'T CHANGE STACK UNLESS YOU CHECK IF RECV INTERRUPT IS UNMASKED
 	;; TO ENSURE ONLY 1 COPY OF THIS IS RUNNING!!!
@@ -200,91 +292,185 @@ PKT_DRVR_CORE PROC FAR
 	mov		si,ax ; SI = INT_SVC_TABLE entry
 	pop		ax
 	cmp		si,INT_SVC_TABLE_L ; Check if command is valid
-	jb		PKT_DRVR_CORE_EXECUTE ; if yes, execute
+	jb		PKT_INT_MAIN_SVC_EXE ; if yes, execute
 	xor		si,si ; if no, force invalid command entry
-PKT_DRVR_CORE_EXECUTE: ;; CAN'T BE A CALL BECAUSE OF SI RECOVERY
+PKT_INT_MAIN_SVC_EXE: ;; CAN'T BE A CALL BECAUSE OF SI RECOVERY
 	jmp		WORD PTR CS:[SI + OFFSET INT_SVC_TABLE] ; will return on it's own, must pop SI
 	DEBUG_PARA_ALIGN_MACRO
-PKT_DRVR_CORE ENDP
-
-; return carry clear if not already masked
-; return carry set if already masked
-FORCE_MASK_IRQ_CHECK PROC NEAR
-	push	ax
-	in		al,port_pic_data
-	mov		ah,al ; save copy
-	or		al,mask_modem_bit
-	out		port_pic_data,al ; unconditionally mask, a
-	test	ah,mask_modem_bit ; check if interrupt was already masked
-	jz		FORCE_MASK_IRQ_CHECK_N ; if 0, it was unmasked
-	stc		; was masked, aka inactive, aka 1
-	jmp		FORCE_MASK_IRQ_CHECK_D
-FORCE_MASK_IRQ_CHECK_N:	
-	clc		; was unmasked, aka active, aka 0
-FORCE_MASK_IRQ_CHECK_D:
-	pop		ax
-	ret
-FORCE_MASK_IRQ_CHECK ENDP
-
-MASK_IRQ4 PROC NEAR
-	push	ax
-	in		al,port_pic_data
-	or		al,mask_modem_bit ; 0001 0000 setup mask 
-	out		port_pic_data,al
-	pop		ax
-	ret
-MASK_IRQ4 ENDP
-
-UNMASK_IRQ4 PROC NEAR
-	push	ax
-	in		al,port_pic_data
-	and		al,NOT mask_modem_bit ; 1110 1111 setup mask clear
-	out		port_pic_data,al ; write interrupt controller mask reg to unmask modem
-	pop		ax
-	ret
-UNMASK_IRQ4 ENDP
-
-ACK_IRQ PROC NEAR
-	push	ax
-	mov		al,val_pic_eoi
-	out		port_pic_cmd,al ; Ack hardware Interrupt
-	pop		ax
-	ret
-ACK_IRQ ENDP
+PKT_INT_MAIN ENDP
 
 debug_str_int_called db "Interrupt!$"
-PKT_DRIVER_RECV_DEFAULT PROC FAR
-	; TODO - clear received packets
-	; CONDITIONALLY MASK IRQ4
-	call	FORCE_MASK_IRQ_CHECK ; Make sure nothing was using it already
-	jc		PKT_DRIVER_RECV_DEFAULT_T ; If it was in use, bail
+debug_str_int_nmi db "NMI Mask$"
+debug_str_int_reject db "Rejected!$"
+RCV_INT_RANGE_JMP_END:
+	jmp		NEAR PTR RCV_INT_MAIN_END
+RCV_INT_RANGE_JMP_DONE:
+	jmp		NEAR PTR RCV_INT_MAIN_DONE
+RCV_INT_MAIN PROC FAR ; SHIM needs to point here for RX
+	; AX contains MEMOERYSHIM SEGMENT, MUST PRESERVE ALL REGISTERS EXCEPT FLAGS
+	; - Must pop AX and iret when complete (unconditionally)
+	; - Must ACK PIC IRQ (unconditionally)
+	; - Must check if card is in use (for sanity)
+	; - Must clear jrNIC interrupt line (if not in use)
+	sti						; Re-enable interrupts
+	push	ds				; Preserve caller's DS
+	push	dx				; Preserve DX
+	push	bp				; Preserve BP
+	mov		ds,ax			; Set DS to MEMORYSHIMBEGIN segment
+	FORCE_MASK_IRQ_CHECKM 	; Mask IRQ4/Check if already masked
+									; Yes this is here...
+									; Technically it shouldn't be needed
+									; because if something was using
+									; the card it would mask IRQ preventing
+									; out entry, but for everyone's sanity
+									; we'll keep this check here
+	jnz		RCV_INT_RANGE_JMP_END	; Card is in use, bail, should NOT be possible
 	
-	;; DO YOUR THING
-	UTILM_PRINT_STR debug_str_int_called
+	;; Card not in use and is now marked for use
+
+;	DO THINGS, preserve all registers used
+	call	HAL_DISABLE_RX ; Disable further reception, uses AX/DX/FLAGS
+	UTILM_PRINT_STRN debug_str_int_called
 	
+	;; Read Packet Size, check for weird error, and save
+	call	HAL_GET_PACKET_SIZE ; get packet size into AX, uses AX/DX/FLAGS
+	cmp		ax,0h ; just in case packet is somehow zero?
+	je		RCV_INT_RANGE_JMP_DONE ; Shouldn't be possible, but whatever...
+	mov		[packet_size],ax ; Save packet size
 	
-	;;;;;; TODO - need to work out interrupt logic
-	; 1.) PCjr interrupt is now disabled
-	; 2.) HAL_RX ; 
-	;     0.) Disable receiving - clear ECON1_RXEN
-	;     1.) Clear global interrupt bit (lifts hw interrupt flag)
-	;   X - Receiving packets - Page 43 (section 7.2)  
-	;	2.) Int: Page 63 (Section 12)
-	;     xxxx read packet bytes
-	;     xxxx decrement epktcnt until 0
-	;     xxxx reset hardware pointer
-	;; Unmask the hardware interrupt
-	call	UNMASK_IRQ4
+	;; Swap STACK from interuptee to internal
+	mov		dx,ss 		; Save interuptee's stack SS:SP in registers
+	mov		bp,sp
 	
-PKT_DRIVER_RECV_DEFAULT_T:
-	;call	ACK_IRQ
-	;; Ack PCjr IRQ
-	push	ax
-	mov		al,val_pic_eoi
-	out		port_pic_cmd,al ; Ack hardware Interrupt
-	pop		ax ; can't disturb registers in a HW interrupt
-	iret
-PKT_DRIVER_RECV_DEFAULT ENDP
+	; Disable NMI (to protect Stack swap)
+	mov		al,nmi_disable
+	out		port_nmi_mask_reg,al
+
+	; Setup internal stack
+	mov		ax,ds
+	cli			; Disable interrupts
+	mov		ss,ax
+	mov		sp,offset RESIDENT_BLOCK_SIZE_R
+	sti 	; Enable interrupts
+		
+	; Enable NMI
+	mov		al,nmi_enable
+	out		port_nmi_mask_reg,al
+	in		al,port_nmi_mask_reg ; Clear NMI latch
+	
+	;; Push EVERYTHING, receiver only saves DS, SS, SP, and FLAGS
+	;push	ax ; already preserved
+	push	bx
+	push	cx
+	push	dx ; interuptee's stack segment
+	push	bp ; interuptee's stack pointer
+	push	si
+	push	di
+	;push	ds ; already preserved
+	push	es
+	
+	;;;;;; SAFETY ZONE
+	;; Copy packet to internal buffer
+	mov		ax,ds
+	mov		es,ax ; Set ES to SHIM
+	mov		di,offset pkt_mem_buffer ; DI = offset
+	mov		cx,[packet_size] ; CX = packet size in bytes
+	call	HAL_RX
+	
+	;; LOOP FOR each registered caller, notify them about the packet 
+	xor		bx,bx ; Start at handle 0
+RCV_INT_NOTIFY_LOOP: 
+	xor		ax,ax ; First call, flag is 0
+	mov		cx,[packet_size] ; CX = packet size in bytes
+	push	bx ; Save BX
+	call	DWORD PTR [receiver_call_ptrs + bx] ; destroys everything except DS, SS, SP, and FLAGS
+	pop		bx ; Restore BX
+		; Check if caller gave us a good buffer back. ES:DI == 0:0 if buffer bad, else good
+	cmp		di,0h
+	jne		RCV_INT_NOTIFY_LOOP_COPY ; if DI != 0, we know we got a good buffer!
+	mov		ax,es
+	cmp		ax,0h ; if DI was 0, it may still be valid unless ES is also 0
+	je		RCV_INT_NOTIFY_LOOP_UPDATE ; If 0:0, this caller doesn't want it, update loop
+RCV_INT_NOTIFY_LOOP_COPY: ;; Caller does want it, ES:DI has buffer
+	; DS is still set to SHIM
+	push	di ; Save DI, contains recv buffer offset
+	mov		si,offset pkt_mem_buffer ; internal buffer offset
+	mov		cx,[packet_size]
+	cld		; Forward direction
+	rep		movsb
+	pop		si ; pop DI into SI, contains recv buffer OFFSET
+	
+	push	ds ; Save DS SHIM
+	mov		ax,ds
+	mov		es,ax ; now DS = BUFFER
+	mov		ax,1h ; Second call flag
+	mov		cx,es:[packet_size] ; CX = packet size in bytes
+	push	bx ; Save receiver offset
+	call	DWORD  PTR es:[receiver_call_ptrs + bx] ; destroys everything except DS, SS, SP, and FLAGS
+	pop		bx ; Restore receiver offset
+	pop		ds ; put back DS=SHIM
+RCV_INT_NOTIFY_LOOP_UPDATE:
+	add		bx,4h
+	cmp		bx,SIZE receiver_call_ptrs
+	jb		RCV_INT_NOTIFY_LOOP
+	;;;;;; END SAFETY ZONE
+
+	;; Pop EVERYTHING
+	pop		es
+	;pop	ds ; already preserved
+	pop		di
+	pop		si
+	pop		bp ; interuptee's stack pointer
+	pop		dx ; interuptee's stack segment
+	pop		cx
+	pop		bx
+	;pop	ax ; already preserved
+	;; Restore interuptee's STACK
+	
+	; Disable NMI (to protect Stack swap)
+	mov		al,nmi_disable
+	out		port_nmi_mask_reg,al
+	
+		; Return to old stack
+	cli 			; Disable interrupts
+	mov		ss,dx
+	mov		sp,bp
+	sti 			; Enable interrupts
+
+	; Enable NMI
+	mov		al,nmi_enable
+	out		port_nmi_mask_reg,al
+	in		al,port_nmi_mask_reg ; Clear NMI latch
+
+RCV_INT_MAIN_DONE:	
+	call	HAL_ENABLE_RX ; Conditionally Re-enable reception
+	UNMASK_IRQ4M ; Conditionally Unmask (activate) IRQ4
+RCV_INT_MAIN_END: ;; Restore bp/dx/ds, ACK the PIC interrupt that got us here, restore AX
+	pop		bp					
+	pop		dx
+	pop		ds 		; Restore BP/DX/DS off of interuptee's stack (was pushed in SHIM)
+	ACK_IRQM		; ACK PIC IRQ
+	pop		ax 		; Restore AX off of interuptee's stack (was pushed in SHIM)
+	iret			; Return control to interuptee
+RCV_INT_MAIN ENDP
+
+;; Dummy receive handler, returns buffer size 0 aka error
+; BX = handle
+; CX = packet size
+debug_str_handle db "Handle$"
+debug_str_size db "Size$"
+debug_str_call db "Call$"
+RCV_DUMMY_RET PROC FAR
+	UTILM_PRINT_WREG debug_str_handle,bx
+	UTILM_PRINT_NEWLINE
+	UTILM_PRINT_WREG debug_str_call,ax
+	UTILM_PRINT_NEWLINE
+	UTILM_PRINT_WREG debug_str_size,cx
+	UTILM_PRINT_NEWLINE
+	xor		di,di
+	mov		es,di
+	ret
+RCV_DUMMY_RET ENDP
 
 IFE ROM ; COM Align end of TSR
 	PARA_ALIGN_MACRO
@@ -301,9 +487,10 @@ INIT PROC FAR 	; BIOS enters, TODO
 IF DEBUG
 	UTILM_PRINT_STRN debug_txrx_reset
 ENDIF
-	call	DISABLE_HARDWARE_INT
+	MASK_IRQ4M
+	;call	MASK_IRQ4 ; ensure no gibberish receives can occur
 	call	HAL_RESET ; Reset the card
-
+	; Intentionally leaves card masked, driver will properly initialize later
 	ret ; Far Return
 	DEBUG_PARA_ALIGN_MACRO
 INIT ENDP
@@ -391,48 +578,70 @@ SAVE_INT_NIBBLE ENDP
 
 PAGE
 SET_DESIRED_INT PROC NEAR
-	; Need to search PSP:80-FFH looking for first two ASCII characters representing hex digits
+	; Need to search PSP:80-FFH (DOS args)
+	; looking for first two ASCII characters representing hex digits
+	
+	; 0.) Set current int_pkt_driver to 0 by default
 	xor		al,al
 	mov		[int_pkt_driver],al ; Zero pkt driver int
 	
+	; 1.) Looking for any two valid ASCII numbers
 	mov		dl,02h ; Need to find 2 valid chars, not worried about sequential
 	
+	; 2.) Get length of DOS command line args
 	mov		si,val_dos_args_80h
 	mov		cl,[si] ; Get number of chars
-	inc		si	
-SET_DESIRED_INT_LOOP:  ; TODO: is this off by 1?
-	cmp		cl,00h
-	je		SET_DESIRED_INT_CONT
-	mov		al,[si]
 	inc		si
-	dec		cl
-	call	UTIL_ASCII_NUM_TO_HEX
-	jc		SET_DESIRED_INT_LOOP
-	dec		dl
-	call	SAVE_INT_NIBBLE
-	cmp		dl,00h
-	je		SET_DESIRED_INT_FOUND
-SET_DESIRED_INT_NOT_FOUND:
-	jmp		SHORT SET_DESIRED_INT_LOOP
-SET_DESIRED_INT_CONT:
-	stc
-	ret
-SET_DESIRED_INT_FOUND:
+	
+	; 3.) Loop over DOS command line arg characters
+SET_DESIRED_INT_LOOP:  ; TODO: is this off by 1
+	; Need to check CL because CL may have been zero to start
+	cmp		cl,00h					; If we ran out of characters without finding 2
+	je		SET_DESIRED_INT_NOTFOUND	; Desired Int Not Found
+	mov		al,[si]					; Get next character
+	inc		si						; Inc index
+	dec		cl						; Dec number of characters left
+	call	UTIL_ASCII_NUM_TO_HEX	; Check if current character is ASCII num
+	jc		SET_DESIRED_INT_LOOP	; If not, loop to check next number
+	dec		dl						; If it was, decrement found character count
+	call	SAVE_INT_NIBBLE			; Save character to [int_pkt_driver]
+	cmp		dl,00h					; Check if we've found 2
+	je		SET_DESIRED_INT_FOUND	; If so, we're done
+	jmp		SHORT SET_DESIRED_INT_LOOP	; Else check next character
+SET_DESIRED_INT_FOUND:		; We found our number
 	; Check if between 60 and 80h
 	mov		al,[int_pkt_driver]
-	cmp		al,60h
-	jb		SET_DESIRED_INT_CONT
-	cmp		al,80h
-	ja		SET_DESIRED_INT_CONT
-	clc
+	cmp		al,60h						; check if less than 60h
+	jb		SET_DESIRED_INT_NOTFOUND
+	cmp		al,80h						; check if greater than 80h
+	ja		SET_DESIRED_INT_NOTFOUND
+	clc									; Valid INT found!
+	ret
+SET_DESIRED_INT_NOTFOUND:
+	stc
 	ret
 SET_DESIRED_INT ENDP
 PAGE
 
+
+RESET_RECV_CALLEE PROC NEAR
+	
+	xor		bx,bx
+	mov		ax,cs
+RESET_RECV_CALLEE_LOOP:
+	mov		word ptr [receiver_call_ptrs+bx],offset RCV_DUMMY_RET 
+	add		bx,2
+	mov		word ptr [receiver_call_ptrs+bx],ax ; Segment
+	add		bx,2
+	cmp		bx,SIZE receiver_call_ptrs ; number of bytes
+	jb		RESET_RECV_CALLEE_LOOP
+	ret
+RESET_RECV_CALLEE ENDP
+
 LOAD_RESIDENT_TSR PROC NEAR
 	UTILM_PRINT_STR debug_str_loading
 IF ROM ; If RAM, not necessary as we will use the existing resident block
-	; Copy CS:MEMORYSHIMBEGIN block to DS:RAM
+	; 0.) Copy CS:MEMORYSHIMBEGIN block to DS:RAM
 	push	ds ; save DS=PSP
 		; Set ES:DI to destination (PSP:MEMORYSHIMBEGIN)
 	mov		ax,ds
@@ -449,43 +658,64 @@ IF ROM ; If RAM, not necessary as we will use the existing resident block
 	rep		movsw
 	pop		ds ; restore DS=PSP
 ENDIF
-	; Fix PSP:call	FAR PTR PLACEHOLDER_JMP to CS:PKT_DRVR_CORE
-	mov		ax,offset PKT_DRVR_CORE
-	mov		WORD PTR [SHIM_INT_CALL+1],ax ; call <offset>
+	; 1.) Fix PSP:call	FAR PTR PLACEHOLDER_JMP to CS:PKT_INT_MAIN
+	mov		ax,offset PKT_INT_MAIN
+	mov		WORD PTR [PKT_INT_SHIM_CALL+1],ax ; call <offset>
 	mov		ax,cs
-	mov		WORD PTR [SHIM_INT_CALL+3],ax ; call <offset> <seg>
+	mov		WORD PTR [PKT_INT_SHIM_CALL+3],ax ; call <offset> <seg>
 	
-	;; TODO - Check args for INT
-	call	SET_DESIRED_INT
-	jnc		LOAD_CONT ;; If failed to set INT, bail
-	;; Print error
+	; 2.) Fix PSP:call	FAR PTR PLACEHOLDER_JMP to CS:RCV_INT_MAIN
+	mov		ax,offset RCV_INT_MAIN
+	mov		WORD PTR [RCV_INT_SHIM_CALL+1],ax ; call <offset>
+	mov		ax,cs
+	mov		WORD PTR [RCV_INT_SHIM_CALL+3],ax ; call <offset> <seg>
+	
+	; 3.) Figure out what INT user wants to use
+	call	SET_DESIRED_INT 
+	jnc		SET_DEFAULT_RECV_CALLEE 	; If success, continue
+	;; Print error		; Else
 	mov		ah,[int_pkt_driver]
 	UTILM_PRINT_BREG str_invalid_int, ax
-	;; exit clean
-	jmp		NEAR PTR EXITCLEAN
+	stc ; indicate error
+	ret ; exit
 	
 	
-	;;		Range check desired int
-	;;
-LOAD_CONT:
+	; 4.) Receive interrupt tries to pass packets to a registered callee
+	;	Set the default registered callee to a dummy pointer
+SET_DEFAULT_RECV_CALLEE:	
+	call	RESET_RECV_CALLEE
+	
+	; 5.) Load PKT Driver INT API
+LOAD_TSR_INT:
 	mov		ah,[int_pkt_driver]
 	UTILM_PRINT_BREG debug_str_int,ax
 	UTILM_PRINT_NEWLINE
 	
-	; Retrieve old int + store in DS
+	; 5a.) Retrieve old int + store in DS:[orig_int_offset]
 	mov		ah,svc_dos_get_interrupt_35
 	mov		al,[int_pkt_driver]
-	int		int_dos_21 ; ES:BX has original values
+	int		int_dos_21					; Get Old interrupt
+;	 ES:BX has original values	
 	mov		[orig_int_offset],bx
 	mov		bx,es
 	mov		[orig_int_segment],bx
 		
-	; Set new int to PSP:MEMORYSHIMBEGIN
+	; 5b.) Set new int to PSP:MEMORYSHIMBEGIN
 	; ds already = PSP
 	mov		dx,offset MEMORYSHIMBEGIN
 	mov		ah,svc_dos_set_interrupt_25
 	mov		al,[int_pkt_driver]
-	int		int_dos_21
+	int		int_dos_21					; Set PKT Driver Interrupt
+	
+	; 6.) Load IRQ RECV INT
+LOAD_RECV_INT:
+	; ds already = PSP
+	mov		dx,offset RCV_INT_SHIM_ENTRY
+	mov		ah,svc_dos_set_interrupt_25
+	mov		al,int_modem
+	int		int_dos_21					; Set MODEM (RECV) Interrupt
+	
+	clc ; Successfully loaded
 	ret
 LOAD_RESIDENT_TSR ENDP
 PAGE
@@ -566,63 +796,19 @@ DEBUG_PRINT_PROC PROC NEAR
 	ret
 DEBUG_PRINT_PROC ENDP
 
-DISABLE_HARDWARE_INT PROC NEAR
-	call MASK_IRQ4
-	ret
-DISABLE_HARDWARE_INT ENDP
-
-SETUP_DEFAULT_HARDWARE_INT PROC NEAR
-	push	es
-	push	ds ; preserve
-	
-	; Set DS to CS
-	mov		ax,cs
-	mov		ds,ax 
-	
-	 ; Set ES to interrupt vector table
-	mov		ax,interrupt_vector_table_segment
-	mov		es,ax
-	
-	; Set HW interrupt vector to point to internal vector
-	mov		ax,offset PKT_DRIVER_RECV_DEFAULT
-	mov		es:[int_modem_offset],ax
-	mov		ax,cs
-	mov		es:[int_modem_segment],ax
-	
-	pop		ds ; restore
-	pop		es
-
-	ret
-SETUP_DEFAULT_HARDWARE_INT ENDP
-
-ENABLE_HARDWARE_INT PROC NEAR
-	call	UNMASK_IRQ4
-	ret
-ENABLE_HARDWARE_INT ENDP
-
 debug_str_init_adapter db "Initializing Adapter...$"
-debug_str_todo db "TODO: HAL_INIT -> next parts$"
+debug_str_enable_rx db "Enabling RX...$"
 INIT_ADAPTER PROC NEAR
 	; Call HAL_INIT to initalize card
 	; then setup PCjr default HW RX interrupt
 	; then enable PCjr HW RX interrupt
 	; then enable HAL_ENABLE_RX
 	UTILM_PRINT_STRN debug_str_init_adapter
-	call	DISABLE_HARDWARE_INT
-	call	SETUP_DEFAULT_HARDWARE_INT
-	call	ENABLE_HARDWARE_INT
 	call	HAL_INIT ; Initialize the card
+	UTILM_PRINT_STRN debug_str_enable_rx
 	call	HAL_ENABLE_RX
-	
 	ret
 INIT_ADAPTER ENDP
-
-debug_str_todo2 db "TODO: MUST INITIALIZE RECEIVE INT"
-db "(INIT_HW_RECV_INT)$"
-INIT_HW_RECV_INT PROC NEAR
-	UTILM_PRINT_STRN debug_str_todo2
-	ret
-INIT_HW_RECV_INT ENDP
 
 ;;;;;;;;;;;;;;;;;;;;
 ;; MAIN
@@ -642,37 +828,47 @@ str_sp db "SP$"
 str_invalid_int db "Arg1 must be between 60 and 80 hex"
 db 0dh,0ah
 db "Interupt requested$"
+debug_str_masking db "Masking...$"
+debug_str_unmasking db "Unmasking...$"
+debug_str_resetting_adap db "Resetting adapter...$"
+debug_str_checkmask db "Check masking...$"
 DEBUG_PARA_ALIGN_MACRO
 MAIN PROC FAR
 	UTILM_PRINT_SEGS		;; Debug print
-;;;
 ;; Step 0.) Move the stack pointer in to top of needed memory
 ;; SS is already set to PSP by default - DOS Technical Reference (pg. 6-8)
-;;;
 MOVESTACK: ; Moves stack, can't be function
 	mov		sp,MEMORY_BLOCK_SIZE	; Set SP to end of memory block
 	xor		ax,ax					; Push 0's on the new stack,
 	push	ax  					; DOS Technical Reference (pg. 6-8)
 
-;;;
 ;; Step 1.) SET BLOCK to free unnecessary memory
-;;;
 SETBLOCKSTART:
 	call	SET_BLOCK
 	call	DEBUG_PRINT_PROC
 
-;;;
-;; Step 2.) Check if COM or ROM are already TSR from
+;; Step 2.) Prepare jrNIC HW
+;; 2a.) Mask IRQ to prevent firing
+;; 2b.) Reset HW adapter
+RESETADAPTER:
+	;call	MASK_IRQ4
+	MASK_IRQ4M
+	UTILM_PRINT_STRN debug_str_resetting_adap
+	call	HAL_RESET
+
+;; Step 3.) Check if COM or ROM are already TSR from
 ;; a previous session
-;; 2a.) If not already loaded, we need to load and TSR
-;; 2b.) If already loaded, we need to unload and exit
-;;;
+;; 3a.) If not already loaded, we need to load and TSR
+;; 3b.) If already loaded, we need to unload and exit
 CHECK_IF_ALREADY_LOADED: 
 	call	CHECKLOADED ; SCAN 60h-80h for signature
 	jc		UNLOAD ; Was loaded, need to unload
-LOAD: ; 2a.)  Need to load ourselves and then TSR
+LOAD: ; 2a.)  Need to load ourselves and then TSR + RECV
 	call	LOAD_RESIDENT_TSR
+	jc		EXITCLEAN ; If we failed, exit
 	call	INIT_ADAPTER
+	;call	UNMASK_IRQ4
+	UNMASK_IRQ4M
 EXITTSR: ; Terminate, free up additional memory
 	; DS is already PSP
 	mov		dx,RESIDENT_BLOCK_PARA
@@ -696,7 +892,9 @@ debug_txrx_test db "Test$"
 debug_txrx_complete db "Complete$"
 ;;;;;
 ;; TEST CART - used to debug the low level functions
-;; - Technically violates the HAL
+;; - Technically violates the HAL by directly accessing HW
+;; - TODO - have PD provide HAL with a debug print FUNCTION
+;; - Then reimplement DEBUG as HAL_DEBUG
 ;;;;;
 DEBUG_PARA_ALIGN_MACRO
 TESTCART PROC NEAR
@@ -721,7 +919,7 @@ TEST1_T: ;; 20241215 - GOOD
 	
 	; b.) Reset Card
 	UTILM_PRINT_STRN debug_txrx_reset
-	call	TXRX_SOFT_RESET
+	call	HW_SOFT_RESET
 	
 	; c.) Read ECON1_REGISTER (ANY BANK), value on reset: 00
 	UTILM_PRINT_STRN debug_txrx_test1_read_econ1
@@ -730,7 +928,7 @@ TEST1_T: ;; 20241215 - GOOD
 	UTILM_PRINT_NEWLINE
 	
 	mov		ah,ECON1_REGISTER
-	call	READ_ETH_REGISTER ; al = bank value
+	call	HW_READ_ETH_REGISTER ; al = bank value
 	mov		ah,al
 	UTILM_PRINT_BREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
@@ -739,7 +937,7 @@ TEST1_T: ;; 20241215 - GOOD
 	UTILM_PRINT_STRN debug_txrx_test1_write_econ1
 	mov		ah,ECON1_REGISTER
 	mov		al,BANK3 ; Set to bank 3
-	call	WRITE_REGISTER
+	call	HW_WRITE_REGISTER
 
 	; d.) Read ECON1_REGISTER (ANY BANK)
 	UTILM_PRINT_STRN debug_txrx_test1_read_econ1
@@ -748,7 +946,7 @@ TEST1_T: ;; 20241215 - GOOD
 	UTILM_PRINT_NEWLINE
 
 	mov		ah,ECON1_REGISTER
-	call	READ_ETH_REGISTER ; al = bank value
+	call	HW_READ_ETH_REGISTER ; al = bank value
 	mov		ah,al
 	UTILM_PRINT_BREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
@@ -759,12 +957,12 @@ TEST1_T: ;; 20241215 - GOOD
 ENDIF
 IF DEBUG_TEST2
 	jmp		TEST2_T
-	debug_txrx_test2_name db "CORE COMMANDS: BIT_FIELD_SET, BIT_FIELD_CLEAR$"
+	debug_txrx_test2_name db "CORE COMMANDS: HW_BIT_FIELD_SET, HW_BIT_FIELD_CLEAR$"
 	debug_txrx_test2_read_econ1 db "Read ECON1_REGISTER$"
 	debug_txrx_test2_bfs_econ1 db "Bit Field Set ECON1_REGISTER$"
 	debug_txrx_test2_bfc_econ1 db "Bit Field Clear ECON1_REGISTER$"
 TEST2_T:  ;; 20241215 - GOOD
-	; a.) CORE COMMANDS: BIT_FIELD_SET, BIT_FIELD_CLEAR
+	; a.) CORE COMMANDS: HW_BIT_FIELD_SET, HW_BIT_FIELD_CLEAR
 	mov	ah,2
 	UTILM_PRINT_BREG debug_txrx_test,ax
 	UTILM_PRINT_NEWLINE
@@ -772,7 +970,7 @@ TEST2_T:  ;; 20241215 - GOOD
 	
 	; b.) Reset Card
 	UTILM_PRINT_STRN debug_txrx_reset
-	call	TXRX_SOFT_RESET
+	call	HW_SOFT_RESET
 	
 	; c.) Read ECON1_REGISTER (ANY BANK), value on reset: 00
 	UTILM_PRINT_STRN debug_txrx_test2_read_econ1
@@ -781,7 +979,7 @@ TEST2_T:  ;; 20241215 - GOOD
 	UTILM_PRINT_NEWLINE
 	
 	mov		ah,ECON1_REGISTER
-	call	READ_ETH_REGISTER ; al = bank value
+	call	HW_READ_ETH_REGISTER ; al = bank value
 	mov		ah,al
 	UTILM_PRINT_BREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
@@ -790,7 +988,7 @@ TEST2_T:  ;; 20241215 - GOOD
 	UTILM_PRINT_STRN debug_txrx_test2_bfs_econ1
 	mov		ah,ECON1_REGISTER
 	mov		al,01h ; bit field set
-	call	BIT_FIELD_SET
+	call	HW_BIT_FIELD_SET
 	
 	; e.) Read Register ECON1_REGISTER (ANY BANK), should be 01
 	UTILM_PRINT_STRN debug_txrx_test2_read_econ1
@@ -799,7 +997,7 @@ TEST2_T:  ;; 20241215 - GOOD
 	UTILM_PRINT_NEWLINE
 	
 	mov		ah,ECON1_REGISTER
-	call	READ_ETH_REGISTER ; al = bank value
+	call	HW_READ_ETH_REGISTER ; al = bank value
 	mov		ah,al
 	UTILM_PRINT_BREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
@@ -808,7 +1006,7 @@ TEST2_T:  ;; 20241215 - GOOD
 	UTILM_PRINT_STRN debug_txrx_test2_bfc_econ1
 	mov		ah,ECON1_REGISTER
 	mov		al,01h ; bit field clear
-	call	BIT_FIELD_CLEAR
+	call	HW_BIT_FIELD_CLEAR
 	
 	; g.) Read Register ECON1_REGISTER (ANY BANK), should be 00
 	UTILM_PRINT_STRN debug_txrx_test2_read_econ1
@@ -817,7 +1015,7 @@ TEST2_T:  ;; 20241215 - GOOD
 	UTILM_PRINT_NEWLINE
 	
 	mov		ah,ECON1_REGISTER
-	call	READ_ETH_REGISTER ; al = bank value
+	call	HW_READ_ETH_REGISTER ; al = bank value
 	mov		ah,al
 	UTILM_PRINT_BREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
@@ -828,11 +1026,11 @@ TEST2_T:  ;; 20241215 - GOOD
 ENDIF
 IF DEBUG_TEST3
 	jmp		TEST3_T
-	debug_txrx_test3_name db "SUPPORT COMMANDS: SET_CONTROLLER_BANK, GET_CONTROLLER_BANK$"
-	debug_txrx_test3_get_bank db "GET_CONTROLLER_BANK$"
-	debug_txrx_test3_set_bank db "SET_CONTROLLER_BANK$"	
+	debug_txrx_test3_name db "SUPPORT COMMANDS: HW_SET_CONTROLLER_BANK, HW_GET_CONTROLLER_BANK$"
+	debug_txrx_test3_get_bank db "HW_GET_CONTROLLER_BANK$"
+	debug_txrx_test3_set_bank db "HW_SET_CONTROLLER_BANK$"	
 TEST3_T: ;; 20241215 - GOOD
-	; a.) SUPPORT COMMANDS: SET_CONTROLLER_BANK, GET_CONTROLLER_BANK
+	; a.) SUPPORT COMMANDS: HW_SET_CONTROLLER_BANK, HW_GET_CONTROLLER_BANK
 	mov	ah,3
 	UTILM_PRINT_BREG debug_txrx_test,ax
 	UTILM_PRINT_NEWLINE
@@ -840,29 +1038,29 @@ TEST3_T: ;; 20241215 - GOOD
 	
 	; b.) Reset Card
 	UTILM_PRINT_STRN debug_txrx_reset
-	call	TXRX_SOFT_RESET
+	call	HW_SOFT_RESET
 	
-	; c.) Call GET_CONTROLLER_BANK, should be 00 (default)
+	; c.) Call HW_GET_CONTROLLER_BANK, should be 00 (default)
 	UTILM_PRINT_STRN debug_txrx_test3_get_bank
 	mov		ah,00
 	UTILM_PRINT_BREG debug_txrx_expected,ax
 	UTILM_PRINT_NEWLINE
-	call	GET_CONTROLLER_BANK
+	call	HW_GET_CONTROLLER_BANK
 	mov		ah,al ; move to AH
 	UTILM_PRINT_BREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
 	
-	; d.) Call SET_CONTROLLER_BANK
+	; d.) Call HW_SET_CONTROLLER_BANK
 	UTILM_PRINT_STRN debug_txrx_test3_set_bank
 	mov		ah,BANK2
-	call	SET_CONTROLLER_BANK
+	call	HW_SET_CONTROLLER_BANK
 	
-	; e.) Call GET_CONTROLLER_BANK, should be 02
+	; e.) Call HW_GET_CONTROLLER_BANK, should be 02
 	UTILM_PRINT_STRN debug_txrx_test3_get_bank
 	mov		ah,02
 	UTILM_PRINT_BREG debug_txrx_expected,ax
 	UTILM_PRINT_NEWLINE
-	call	GET_CONTROLLER_BANK
+	call	HW_GET_CONTROLLER_BANK
 	mov		ah,al ; move to AH
 	UTILM_PRINT_BREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
@@ -874,13 +1072,13 @@ ENDIF
 IF DEBUG_TEST4
 	jmp		TEST4_T
 	debug_txrx_test4_name db "COMPOUND COMMANDS:"
-		db "WRITE_REGISTER_LOW_HIGH, "
-		db "READ_ETH_REGISTER_LOW_HIGH$"
+		db "HW_WRITE_REGISTER_LOW_HIGH, "
+		db "HW_READ_ETH_REGISTER_LOW_HIGH$"
 	debug_txrx_test4_read_ERDPT  db "Read ERDPT$"
 	debug_txrx_test4_write_ERDPT db "Write ERDPT$"	
 TEST4_T: ;; 20241215 - GOOD
-	; a.) COMPOUND COMMANDS: WRITE_REGISTER_LOW_HIGH,
-	; 						READ_ETH_REGISTER_LOW_HIGH
+	; a.) COMPOUND COMMANDS: HW_WRITE_REGISTER_LOW_HIGH,
+	; 						HW_READ_ETH_REGISTER_LOW_HIGH
 	mov	ah,4
 	UTILM_PRINT_BREG debug_txrx_test,ax
 	UTILM_PRINT_NEWLINE
@@ -888,7 +1086,7 @@ TEST4_T: ;; 20241215 - GOOD
 	
 	; b.) Reset Card
 	UTILM_PRINT_STRN debug_txrx_reset
-	call	TXRX_SOFT_RESET
+	call	HW_SOFT_RESET
 	
 	; c.) Read 16-bit ERDPT_REGISTER (BANK0) Low, High
 	UTILM_PRINT_STRN debug_txrx_test4_read_ERDPT
@@ -898,10 +1096,10 @@ TEST4_T: ;; 20241215 - GOOD
 	UTILM_PRINT_NEWLINE
 		; Set BANK0
 	mov		ah,BANK0
-	call	SET_CONTROLLER_BANK
+	call	HW_SET_CONTROLLER_BANK
 		; Read ERDPT_REGISTER
 	mov		ax,(ERDPTH_REGISTER SHL 8) OR ERDPTL_REGISTER
-	call	READ_ETH_REGISTER_LOW_HIGH
+	call	HW_READ_ETH_REGISTER_LOW_HIGH
 	UTILM_PRINT_WREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
 	
@@ -909,11 +1107,11 @@ TEST4_T: ;; 20241215 - GOOD
 	UTILM_PRINT_STRN debug_txrx_test4_write_ERDPT
 		; Set BANK0
 	mov		ah,BANK0
-	call	SET_CONTROLLER_BANK
+	call	HW_SET_CONTROLLER_BANK
 		; Write ERDPT_REGISTER
 	mov		ax,(ERDPTH_REGISTER SHL 8) OR ERDPTL_REGISTER
 	mov		bx,0123h
-	call	WRITE_REGISTER_LOW_HIGH ; BANK0
+	call	HW_WRITE_REGISTER_LOW_HIGH ; BANK0
 	
 	; e.) Read 16-bit ERDPT_REGISTER (BANK0) Low, High
 	UTILM_PRINT_STRN debug_txrx_test4_read_ERDPT
@@ -923,10 +1121,10 @@ TEST4_T: ;; 20241215 - GOOD
 	UTILM_PRINT_NEWLINE
 		; Set BANK0
 	mov		ah,BANK0
-	call	SET_CONTROLLER_BANK
+	call	HW_SET_CONTROLLER_BANK
 		; Read ERDPT_REGISTER
 	mov		ax,(ERDPTH_REGISTER SHL 8) OR ERDPTL_REGISTER
-	call	READ_ETH_REGISTER_LOW_HIGH
+	call	HW_READ_ETH_REGISTER_LOW_HIGH
 	UTILM_PRINT_WREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
 	
@@ -936,13 +1134,13 @@ TEST4_T: ;; 20241215 - GOOD
 ENDIF
 IF DEBUG_TEST5
 	jmp		TEST5_T
-	debug_txrx_test5_name db "SUPPORT COMMANDS: SET_ERDPT, SET_EWRPT$"
+	debug_txrx_test5_name db "SUPPORT COMMANDS: HW_SET_ERDPT, HW_SET_EWRPT$"
 	debug_txrx_test5_read_ERDPT  db "Read ERDPT$"
-	debug_txrx_test5_set_ERDPT db "SET_ERDPT$"
+	debug_txrx_test5_set_ERDPT db "HW_SET_ERDPT$"
 	debug_txrx_test5_read_EWRPT  db "Read EWRPT$"
-	debug_txrx_test5_set_EWRPT db "SET_EWRPT$"	
+	debug_txrx_test5_set_EWRPT db "HW_SET_EWRPT$"	
 TEST5_T: ;; 20241215 - GOOD
-	; a.) SUPPORT COMMANDS: SET_ERDPT, SET_EWRPT
+	; a.) SUPPORT COMMANDS: HW_SET_ERDPT, HW_SET_EWRPT
 	mov	ah,5
 	UTILM_PRINT_BREG debug_txrx_test,ax
 	UTILM_PRINT_NEWLINE
@@ -950,7 +1148,7 @@ TEST5_T: ;; 20241215 - GOOD
 	
 	; b.) Reset Card
 	UTILM_PRINT_STRN debug_txrx_reset
-	call	TXRX_SOFT_RESET
+	call	HW_SOFT_RESET
 
 	; c.) Read 16-bit ERDPT_REGISTER (BANK0) Low, High
 	UTILM_PRINT_STRN debug_txrx_test5_read_ERDPT
@@ -960,17 +1158,17 @@ TEST5_T: ;; 20241215 - GOOD
 	UTILM_PRINT_NEWLINE
 		; Set BANK0
 	mov		ah,BANK0
-	call	SET_CONTROLLER_BANK
+	call	HW_SET_CONTROLLER_BANK
 		; Read ERDPT_REGISTER
 	mov		ax,(ERDPTH_REGISTER SHL 8) OR ERDPTL_REGISTER
-	call	READ_ETH_REGISTER_LOW_HIGH
+	call	HW_READ_ETH_REGISTER_LOW_HIGH
 	UTILM_PRINT_WREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
 
-	; d.) Call SET_ERDPT
+	; d.) Call HW_SET_ERDPT
 	UTILM_PRINT_STRN debug_txrx_test5_set_ERDPT
 	mov		ax,1025h
-	call	SET_ERDPT
+	call	HW_SET_ERDPT
 	
 	; e.) Read 16-bit ERDPT_REGISTER (BANK0) Low, High
 	UTILM_PRINT_STRN debug_txrx_test5_read_ERDPT
@@ -980,10 +1178,10 @@ TEST5_T: ;; 20241215 - GOOD
 	UTILM_PRINT_NEWLINE
 		; Set BANK0
 	mov		ah,BANK0
-	call	SET_CONTROLLER_BANK
+	call	HW_SET_CONTROLLER_BANK
 		; Read ERDPT_REGISTER
 	mov		ax,(ERDPTH_REGISTER SHL 8) OR ERDPTL_REGISTER
-	call	READ_ETH_REGISTER_LOW_HIGH
+	call	HW_READ_ETH_REGISTER_LOW_HIGH
 	UTILM_PRINT_WREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
 	
@@ -994,17 +1192,17 @@ TEST5_T: ;; 20241215 - GOOD
 	UTILM_PRINT_NEWLINE
 		; Set BANK0
 	mov		ah,BANK0
-	call	SET_CONTROLLER_BANK
+	call	HW_SET_CONTROLLER_BANK
 		; Read EWRPT_REGISTER
 	mov		ax,(EWRPTH_REGISTER SHL 8) OR EWRPTL_REGISTER
-	call	READ_ETH_REGISTER_LOW_HIGH
+	call	HW_READ_ETH_REGISTER_LOW_HIGH
 	UTILM_PRINT_WREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
 	
-	; g.) Call SET_EWRPT
+	; g.) Call HW_SET_EWRPT
 	UTILM_PRINT_STRN debug_txrx_test5_set_EWRPT
 	mov		ax,1134h
-	call	SET_EWRPT
+	call	HW_SET_EWRPT
 	
 	; h.) Read 16-bit EWRPT_REGISTER (BANK0) Low, High
 	UTILM_PRINT_STRN debug_txrx_test5_read_EWRPT
@@ -1013,10 +1211,10 @@ TEST5_T: ;; 20241215 - GOOD
 	UTILM_PRINT_NEWLINE
 		; Set BANK0
 	mov		ah,BANK0
-	call	SET_CONTROLLER_BANK
+	call	HW_SET_CONTROLLER_BANK
 		; Read EWRPT_REGISTER
 	mov		ax,(EWRPTH_REGISTER SHL 8) OR EWRPTL_REGISTER
-	call	READ_ETH_REGISTER_LOW_HIGH
+	call	HW_READ_ETH_REGISTER_LOW_HIGH
 	UTILM_PRINT_WREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
 	
@@ -1045,73 +1243,73 @@ TEST6_T: ;; 202412156 - GOOD
 	
 	; b.) Reset Card
 	UTILM_PRINT_STRN debug_txrx_reset
-	call	TXRX_SOFT_RESET
+	call	HW_SOFT_RESET
 	
-	; c.) Call SET_ERDPT
+	; c.) Call HW_SET_ERDPT
 	mov		ax,1000h
-	call	SET_ERDPT
+	call	HW_SET_ERDPT
 	
 	; d.) Read single buffer memory byte (default state unknown)
 	UTILM_PRINT_STRN debug_txrx_test6_read_memory_byte
 	UTILM_PRINT_STRN debug_txrx_test6_unk
-	call	READ_BUFFER_MEMORY_BYTE
+	call	HW_READ_BUFFER_MEMORY_BYTE
 	mov		ah,al ; move byte to print
 	UTILM_PRINT_BREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
 	
 	; e.) Call Set EWRPT
 	mov		ax,1000h
-	call	SET_EWRPT
+	call	HW_SET_EWRPT
 	
 	; f.) Write single buffer memory byte
 	UTILM_PRINT_STRN debug_txrx_test6_write_memory_byte
 	mov		al,55h
-	call	WRITE_BUFFER_MEMORY_BYTE
+	call	HW_WRITE_BUFFER_MEMORY_BYTE
 
-	; g.) Call SET_ERDPT
+	; g.) Call HW_SET_ERDPT
 	mov		ax,1000h
-	call	SET_ERDPT
+	call	HW_SET_ERDPT
 
 	; h.) Read single buffer memory byte
 	UTILM_PRINT_STRN debug_txrx_test6_read_memory_byte
 	mov		ah,55h
 	UTILM_PRINT_BREG debug_txrx_expected, ax
 	UTILM_PRINT_NEWLINE
-	call	READ_BUFFER_MEMORY_BYTE
+	call	HW_READ_BUFFER_MEMORY_BYTE
 	mov		ah,al ; move byte to print
 	UTILM_PRINT_BREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
 	
-	; i.) Call SET_ERDPT
+	; i.) Call HW_SET_ERDPT
 	mov		ax,1010h
-	call	SET_ERDPT
+	call	HW_SET_ERDPT
 	
 	; j.) Read single buffer memory word (default state unknown)
 	UTILM_PRINT_STRN debug_txrx_test6_read_memory_word
 	UTILM_PRINT_STRN debug_txrx_test6_unk
-	call	READ_BUFFER_MEMORY_WORD
+	call	HW_READ_BUFFER_MEMORY_WORD
 	UTILM_PRINT_WREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
 	
-	; k.) Call SET_EWRPT
+	; k.) Call HW_SET_EWRPT
 	mov		ax,1010h
-	call	SET_EWRPT
+	call	HW_SET_EWRPT
 	
 	; l.) Write single buffer word
 	UTILM_PRINT_STRN debug_txrx_test6_write_memory_word
 	mov		ax,0aacch
-	call	WRITE_BUFFER_MEMORY_WORD
+	call	HW_WRITE_BUFFER_MEMORY_WORD
 	
-	; m.) Call SET_ERDPT
+	; m.) Call HW_SET_ERDPT
 	mov		ax,1010h
-	call	SET_ERDPT
+	call	HW_SET_ERDPT
 	
 	; n.) Read single buffer memory word (default state unknown)
 	UTILM_PRINT_STRN debug_txrx_test6_read_memory_word
 	mov		ax,0aacch
 	UTILM_PRINT_WREG debug_txrx_expected, ax
 	UTILM_PRINT_NEWLINE
-	call	READ_BUFFER_MEMORY_WORD
+	call	HW_READ_BUFFER_MEMORY_WORD
 	UTILM_PRINT_WREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
 
@@ -1136,7 +1334,7 @@ TEST7_T:
 	
 	; b.) Reset Card
 	UTILM_PRINT_STRN debug_txrx_reset
-	call	TXRX_SOFT_RESET
+	call	HW_SOFT_RESET
 		
 	;; c.) Read PCjr memory: read memory ; needs DS:SI, CX
 	UTILM_PRINT_STR debug_txrx_test7_memory
@@ -1150,9 +1348,9 @@ TEST7_T:
 	pop		ds
 	UTILM_PRINT_NEWLINE
 
-	; d.) Call SET_ERDPT
+	; d.) Call HW_SET_ERDPT
 	mov		ax,1010h
-	call	SET_ERDPT
+	call	HW_SET_ERDPT
 
 	; e.) Read BUFFER MEMORY (ARRAY)
 	UTILM_PRINT_STRN debug_txrx_test7_read_mem_array
@@ -1165,7 +1363,7 @@ TEST7_T:
 	mov		es,ax ; ES set
 	mov		di,PSP_SIZE; DS+PSP_SIZE
 	mov		cx,8h
-	call	READ_BUFFER_MEMORY ; Copy memory
+	call	HW_READ_BUFFER_MEMORY ; Copy memory
 	pop		es
 	; e2.) print read buffer (DS:SI + CX
 	; DS is already set
@@ -1174,9 +1372,9 @@ TEST7_T:
 	call	UTIL_PRINT_MEM
 	UTILM_PRINT_NEWLINE
 	
-	; f.) Call SET_EWRPT
+	; f.) Call HW_SET_EWRPT
 	mov		ax,1010h
-	call	SET_EWRPT
+	call	HW_SET_EWRPT
 	
 	; g.) Write BUFFER MEMORY (ARRAY)
 	UTILM_PRINT_STRN debug_txrx_test7_write_mem_array
@@ -1187,12 +1385,12 @@ TEST7_T:
 	mov		ds,ax ; DS = CS
 	mov		si,offset orig_int_offset
 	mov		cx,8h
-	call	WRITE_BUFFER_MEMORY
+	call	HW_WRITE_BUFFER_MEMORY
 	pop		ds
 
-	; h.) Call SET_ERDPT 
+	; h.) Call HW_SET_ERDPT 
 	mov		ax,1010h
-	call	SET_ERDPT
+	call	HW_SET_ERDPT
 
 	; i.) Read BUFFER MEMORY (ARRAY)
 	UTILM_PRINT_STRN debug_txrx_test7_read_mem_array
@@ -1205,7 +1403,7 @@ TEST7_T:
 	mov		es,ax ; ES set
 	mov		di,PSP_SIZE; DS+PSP_SIZE
 	mov		cx,8h
-	call	READ_BUFFER_MEMORY ; Copy memory
+	call	HW_READ_BUFFER_MEMORY ; Copy memory
 	pop		es
 	; i2.) print read buffer (DS:SI + CX
 	; DS is already set
@@ -1237,7 +1435,7 @@ TEST8_T:
 	
 	; b.) Reset Card
 	UTILM_PRINT_STRN debug_txrx_reset
-	call	TXRX_SOFT_RESET
+	call	HW_SOFT_RESET
 	
 	;; c.) Read MAC MAADR5_REGISTER (BANK3), default 00h
 	UTILM_PRINT_STRN debug_txrx_test8_read_maddr5
@@ -1245,9 +1443,9 @@ TEST8_T:
 	UTILM_PRINT_BREG debug_txrx_expected,ax
 	UTILM_PRINT_NEWLINE
 	mov		ah,BANK3
-	call	SET_CONTROLLER_BANK
+	call	HW_SET_CONTROLLER_BANK
 	mov		ah,MAADR5_REGISTER
-	call	READ_MAC_MII_REGISTER ; al
+	call	HW_READ_MAC_MII_REGISTER ; al
 	mov		ah,al
 	UTILM_PRINT_BREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
@@ -1255,10 +1453,10 @@ TEST8_T:
 	;; d.) Write MAC MAADR5_REGISTER (BANK3) 
 	UTILM_PRINT_STRN debug_txrx_test8_write_maddr5
 	mov		ah,BANK3
-	call	SET_CONTROLLER_BANK
+	call	HW_SET_CONTROLLER_BANK
 	mov		ah,MAADR5_REGISTER
 	mov		al,05h
-	call	WRITE_REGISTER
+	call	HW_WRITE_REGISTER
 	
 	; e.) Read MAC MAADR5_REGISTER (BANK3)
 	UTILM_PRINT_STRN debug_txrx_test8_read_maddr5
@@ -1266,9 +1464,9 @@ TEST8_T:
 	UTILM_PRINT_BREG debug_txrx_expected,ax
 	UTILM_PRINT_NEWLINE
 	mov		ah,BANK3
-	call	SET_CONTROLLER_BANK
+	call	HW_SET_CONTROLLER_BANK
 	mov		ah,MAADR5_REGISTER
-	call	READ_MAC_MII_REGISTER ; al
+	call	HW_READ_MAC_MII_REGISTER ; al
 	mov		ah,al
 	UTILM_PRINT_BREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
@@ -1279,23 +1477,23 @@ TEST8_T:
 	UTILM_PRINT_WREG debug_txrx_expected,ax
 	UTILM_PRINT_NEWLINE
 	mov		ah,PHCON2_REGISTER
-	call	READ_PHY_REGISTER
+	call	HW_READ_PHY_REGISTER
 	UTILM_PRINT_WREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
 		
 	; g.) Write PHCON2_REGISTER
 	UTILM_PRINT_STRN debug_txrx_test8_write_phcon2
 	mov		ah,PHCON2_REGISTER
-	mov		bx,PHCON2_HDLDIS_SET
-	call	WRITE_PHY_REGISTER
+	mov		bx,PHCON2_HDLDIS_BIT
+	call	HW_WRITE_PHY_REGISTER
 	
 	; h.) Read PHCON2_REGISTER
 	UTILM_PRINT_STRN debug_txrx_test8_read_phcon2
-	mov		ax,PHCON2_HDLDIS_SET
+	mov		ax,PHCON2_HDLDIS_BIT
 	UTILM_PRINT_WREG debug_txrx_expected,ax
 	UTILM_PRINT_NEWLINE
 	mov		ah,PHCON2_REGISTER
-	call	READ_PHY_REGISTER
+	call	HW_READ_PHY_REGISTER
 	UTILM_PRINT_WREG debug_txrx_actual,ax
 	UTILM_PRINT_NEWLINE
 			
