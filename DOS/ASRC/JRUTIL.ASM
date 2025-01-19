@@ -106,6 +106,7 @@ UTIL_PRINT_HEX_NIBBLES ENDP
 UTIL_PRINT_STR PROC NEAR ; Uses BIOS function
 	xchg		si,dx ; Use SI as index, save old SI
 UTIL_PRINT_STR_LOOP:
+	cld
 	lodsb	; mov al,ds:[si], inc si
 	cmp		al,'$'
 	je		UTIL_PRINT_STR_DONE
@@ -134,6 +135,7 @@ UTIL_PRINT_STR ENDP
 ;!! Total destroy
 ;!!		AX, CX, SI, flags
 UTIL_PRINT_MEM PROC NEAR
+	cld
 	lodsb		; mov al,ds:[si], inc si
 	mov			ah,al
 	push		cx

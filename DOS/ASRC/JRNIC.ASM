@@ -88,6 +88,8 @@ ACK_IRQM MACRO
 ENDM
 
 PAGE
+;; Used to help assembler figure out dummy
+;; address offsets that get replaced at runtime
 SHIMSEG SEGMENT AT 0h ; Memory resident at end of PSP
 	assume CS:SHIMSEG
 	ORG 100h
@@ -137,42 +139,26 @@ PAGE ;; Memory SHIM
 MEMORYSHIMBEGIN: ; For ROM runs, this will be copied into RAM at end of PSP
 ;;; - PKT INT API ENTRY
 PKT_INT_SHIM_ENTRY:
-	jmp		NEAR PTR PKT_INT_SHIM_CONT ; Near ptr for alignment and PKT DRVR SPEC
-	PKT_DRIVER_SIGNATURE_MACRO
-	PROGRAM_SIGNATURE_MACRO
+	jmp		NEAR PTR PKT_INT_SHIM_CONT ; Near ptr for alignment, PKT DRVR SPEC
+	PKT_DRIVER_SIGNATURE_MACRO	; Packet Driver Required Signature
+	PROGRAM_SIGNATURE_MACRO		; jrNIC Program Signature
 PKT_INT_SHIM_CONT:
-	push	bp ; Preserve caller's BP on caller's stack
-	mov		bp,cs ; Give real PKT_INT the MEMORYSHIMBEGIN segment
+	;; Preserve ALL registers except flags because we are an INT!
+	;; Do as little as possible here because we're possibly in slow RAM
+	;; Save actual work for main body which could be in ROM
+	push	bp	; Preserve caller's BP on caller's stack
+				; Uses BP because that is not a parameter used in the PKT DRV spec
+	mov		bp,cs	; Give real PKT_INT the MEMORYSHIMBEGIN segment in BP
+					; CS:PKT_INT_MAIN must clean up stack
 	PKT_INT_SHIM_CALL:
-	jmp		FAR PTR PLACEHOLDER_JMP ; dummy, replaced at runtime with CS:PKT_DRV_CORE
-;;;;;;;;;
-
-
-;	sti ; Re-enable interrupts
-;	push	bp	; Use BP to pass PSP/MEM because we won't use caller's BP but need
-				; Most of the rest of the caller's args
-;	mov		bp,cs ; Pass resident PSP/Mem to function
-;	PKT_INT_SHIM_CALL: ; For fixing the absolute call
-;	call	FAR PTR PLACEHOLDER_JMP ; dummy, replaced at runtime with CS:PKT_DRV_CORE, sets/clears carry
-;	PKT_INT_SHIM_COMPLETE:
-;	mov		bp,sp ; Get current stack pointer, should have nothing but BP + OFFSET + SEG + FLAGS
-				  ;                                                    0    2        4     6
-;	jc		SHORT PKT_INT_SHIM_RET_GOOD
-;PKT_INT_SHIM_RET_GOOD: ; Clear carry flag on stack
-;	and		BYTE PTR [bp+6],0FEh ; SS:
-;	pop		bp
-;	iret
-	;jmp		SHORT RET_DONE
-;PKT_INT_SHIM_BAD: ; Set carry flag on stack
-;	or		BYTE PTR [bp+6],01h ; SS:
-;	pop		bp
-;	iret
-;;; - PKT RCV IRQ ENTRY
+	jmp		FAR PTR PLACEHOLDER_JMP ; dummy, replaced at runtime with CS:PKT_INT_MAIN
+PKT_INT_SHIM_END: ;; CS:PKT_INT_MAIN will set/clear carry, pop BP, and iret	
+;;; - RCV IRQ ENTRY
 RCV_INT_SHIM_ENTRY:  ;; Can't call any cartridge fuctions directly because they'd be 
 						; near cartridge calls and we're far away in RAM
 	;; Preserve ALL registers except flags because we are an IRQ!
 	;; Do as little as possible here because we're possibly in slow RAM
-	;; Save actual work for 
+	;; Save actual work for main body which could be in ROM
 	push	ax				; 1.) Preserve interuptee's AX on interuptee's stack
 	mov		ax,cs			; 2.) Give real IRQ the MEMORYSHIMBEGIN segment
 	RCV_INT_SHIM_CALL: 
@@ -181,26 +167,20 @@ RCV_INT_SHIM_ENTRY:  ;; Can't call any cartridge fuctions directly because they'
 									; - Must ACK PIC IRQ (unconditionally)
 									; - Must check if card is in use (for sanity)
 									; - Must clear jrNIC interrupt line (if not in use)
-;	call	FAR PTR PLACEHOLDER_JMP ; dummy	; Replaced at runtime with CS:RCV_INT_MAIN
-											; at runtime
-											; Must check if card is in use
-											; Must clear jrNIC interrupt line (if owns card)
-											; and ACK PIC IRQ (unconditionally)
-;	pop		ax ; Restore interuptee's AX from interuptee's stack
-;	iret
-MEMORY_DATA_OFFSET:
+RCV_INT_SHIM_END: ;; CS:RCV_INT_MAIN will iret
+MEMORY_DATA_OFFSET: ;; Resident memory variables
 	orig_int_offset 			dw 0FEC0h ; Dummy
 	orig_int_segment 			dw 0EFBEh ; Dummy
 	orig_recv_offset 			dw 0DDDDh ; Dummy
 	orig_recv_segment 			dw 0CCCCh ; Dummy
 MEMORY_DATA_RECEIVERS:
-	receiver_call_ptrs			dd HANDLE_COUNT dup(0FFFFFFFFh); 4 bytes per entry
+	;receiver_call_ptrs			dd HANDLE_COUNT dup(0FFFFFFFFh); 4 bytes per entry
+	receive_offset				dw 0000h
+	receive_segment				dw 0000h
+	driver_in_use				dw 0000h ; track if driver is in use or not
+	;pkt_next_handle_offset		dw 0000h ; Will hold the next available handle offset
 	packet_size					dw 0000h ; Dummy
 	int_pkt_driver				db int_default_pkt_driver ; Dummy
-	;PACKET_BUFFER_SIZE EQU TX_ADDRESS_END - TX_ADDRESS_START + 1
-	PACKET_BUFFER_SIZE			EQU 5ffh
-	pkt_available_handle		db 00h
-	pkt_mem_buffer				db PACKET_BUFFER_SIZE dup(00h)
 MAC_ADDRESS_TABLE LABEL BYTE
 	db 00h, 03h, 01h, 04h, 01h, 05h ; Default made up source MAC address
 MAC_ADDRESS_TABLE_L EQU $-MAC_ADDRESS_TABLE
@@ -209,6 +189,7 @@ MAC_ADDRESS_TABLE_L EQU $-MAC_ADDRESS_TABLE
 	ELSE
 		allow_unload_env		db 1h
 	ENDIF
+;	pkt_mem_buffer				db PACKET_DRIVER_BUFFER_SIZE dup(00h), no buffer since we only have one client
 	PARA_ALIGN_MACRO ;; Necessary for both paragraph reservation and MOVSW
 MEMORYSHIMEND: 	
 ;;; TODO - move pkt_ram_buffer out of the SHIM definition since they can be done by malloc
@@ -247,51 +228,18 @@ CDEBUG PROC FAR
 CDEBUG ENDP
 
 PAGE
-;; All services must POP SI immediately
-;; BP = current MEMORYSHIMBEGIN SEGMENT
-;; MUST 
-SVC_00 PROC FAR ;; driver_error
-	pop		si ; Restore caller's si
-	mov		dh,LOW BAD_COMMAND
-	stc			; Indicate error condition
-	jmp NEAR PTR SVC_CLEANUP
-SVC_00 ENDP
-SVC_01 PROC FAR ;; driver_info pkt_available_handle
-	pop		si
-	
-	push	ax ; store AH
-	mov		ax,cs
-	mov		ds,ax ; Set DS
-	mov		si,offset DRV_NAME ; Point SI to the driver name
-	mov		bx,DRV_PKT_VERSION
-	mov		ch,DRV_IFCLASS
-	mov		dx,DRV_IFTYPE
-	mov		cl,DRV_IFNUM
-	pop		ax ; restore AH
-	mov		al,DRV_FUNC
-	
-	clc
-	jmp NEAR PTR SVC_CLEANUP
-SVC_01 ENDP
-SVC_02 PROC FAR ;; access_type
-	pop		si
-	
-	;; TODO 2 - check they're asking for typlen = 0 aka all for now
-	
-	;; Check if any handles are available
-	;; If yes, return BX = actual offset
-	;;		and fill in appropriate value
-	;; If no, return carry set
-	
-	;;; TODO, NOW WE SUPPORT MORE HANDLES, STOP HARDCODING
-	mov		ax,0001h; always return handle 1
-	clc		; Indicate success
-	jmp NEAR PTR SVC_CLEANUP
-SVC_02 ENDP
-SVC_CLEANUP PROC FAR ;; Assumes all regs restored except bp
-				  ;; Need to set IRET carry and then IRET
+
+SVC_CHK_HANDLEM MACRO
+ENDM
+
+;; Assumes Carry set/cleared as intended
+;; Assumes all regs restored except bp
+;; Need to set IRET carry and then IRET
+SVC_CLEANUPM MACRO
+	local	SVC_IRET_GOOD
+	local	SVC_IRET_BAD
 	mov		bp,sp ; Get current stack pointer, should have nothing but BP + OFFSET + SEG + FLAGS
-				  ;     
+				  ;    													6      4      2      0 
 	jc		SHORT SVC_IRET_BAD
 SVC_IRET_GOOD: ; Clear carry flag on stack
 	and		BYTE PTR [bp+6],0FEh ; SS:
@@ -301,37 +249,263 @@ SVC_IRET_BAD: ; Set carry flag on stack
 	or		BYTE PTR [bp+6],01h ; SS:
 	pop		bp
 	iret
-SVC_CLEANUP ENP
+ENDM
 
+;; All services must POP SI immediately
+;; Caller BP was pushed
+;; BP = current MEMORYSHIMBEGIN SEGMENT
+;; MUST
+debug_svc_00 db "Service 00, ERROR$"
+SVC_00 PROC FAR ;; driver_error()
+				;; Point all invalid services here
+				;; Return Carry + set return reason to BAD_COMMAND
+				
+	;; 1.) INT_SVC must pop si immediately
+	;; 2.) INT_SVC must jnz to immediately bail out with error without unmasking, set carry, set dh, pop bp, and iret
+	;; 3.) Otherwise, INT_SVC must do work, unmask, clear carry, pop bp, and iret
+	pop		bx ; Restore caller's BX
+	
+;	push	ax
+;	push	ds
+;	mov		ds,bp ; Set DS = MEM
+	
+;	UTILM_PRINT_STRN debug_svc_00
+
+;	pop		ds
+;	pop		ax
+
+	mov		dh,LOW BAD_COMMAND
+	stc			; Indicate error condition
+SVC_00_CLEANUP:
+	SVC_CLEANUPM
+SVC_00 ENDP
+debug_svc_01 db "Service 01, Handle$"
+SVC_01 PROC FAR ;; 6.3 driver_info()
+	pop		bx ; Restore caller's BX
+
+;	UTILM_PRINT_WREG debug_svc_01,bx
+;	UTILM_PRINT_NEWLINE
+	
+	push	ax
+	;push	ds
+	;mov		ds,bp ; Intentionally not setting DS = MEM because we need to return it
+	mov		ax,cs
+	mov		ds,ax ; Set DS:SI to driver data stored on CART/main RAM
+	mov		si,offset DRV_NAME ; Point DS:SI to the driver name
+	mov		bx,DRV_PKT_VERSION
+	mov		ch,DRV_IFCLASS
+	mov		dx,DRV_IFTYPE
+	mov		cl,DRV_IFNUM
+	;pop		ds ; Intentionally not restoring DS because we need to return it
+	pop		ax ; restore AH
+	mov		al,DRV_FUNC
+	clc
+SVC_01_CLEANUP:
+	SVC_CLEANUPM
+SVC_01 ENDP
+
+debug_svc_02 db "Service 02, Typelen$"
+SVC_02 PROC FAR ;; 6.4 access_type() 
+	pop		bx ; Restore caller's BX
+
+;	UTILM_PRINT_WREG debug_svc_02,cx ;; Debug
+;	UTILM_PRINT_NEWLINE
+
+	push	ax
+	push	ds
+	mov		ds,bp ; Set DS = MEM
+
+	;; TODO - check if type already in use
+	
+	; Setup receiver ES:DI seg:off
+	mov		[driver_in_use],0 ; Safety
+	mov		[receive_offset],di ;
+	mov		ax,es
+	mov		[receive_segment],ax
+	mov		[driver_in_use],1 ; Safety
+
+	UNMASK_IRQ4M
+
+	pop		ds
+	pop		ax
+	mov		ax,1 ; return handle to caller
+	clc
+SVC_02_CLEANUP:
+	SVC_CLEANUPM
+SVC_02 ENDP
+
+;; release type needs to mask driver
+debug_svc_03 db "Service 03, Handle$"
+SVC_03 PROC FAR ;; 6.5 release_type()
+	pop		bx ; Restore caller's BX
+
+;	UTILM_PRINT_WREG debug_svc_03,bx ;; Debug
+;	UTILM_PRINT_NEWLINE	
+
+	push	ax ; store AH
+	push	ds
+	mov		ds,bp ; Set DS = MEM
+
+	MASK_IRQ4M ;; Assumes this won't be called from a timer int
+
+	mov		[driver_in_use],0 ; Safety
+	mov		[receive_offset],offset RCV_DUMMY_RET
+	mov		ax,cs
+	mov		[receive_segment],ax 
+	
+	pop		ds
+	pop		ax
+	clc
+SVC_03_CLEANUP:
+	SVC_CLEANUPM	
+SVC_03 ENDP
+
+;; NEED TO RESERVE CARD!
+SVC_04 PROC FAR ;; send_pkt()
+	pop		bx ; Restore caller's BX
+	push	ax
+	
+	;; Ensure we're not interrupting another send or receive process
+	FORCE_MASK_IRQ_CHECKM ; Uses AX
+	jz		SVC_04_SND_PKT
+	mov		dh,CANT_SEND
+	stc
+	jmp		SVC_04_CLEANUP
+SVC_04_SND_PKT:
+	push	dx
+	call	HAL_DISABLE_RX
+	call	HAL_SEND_PKT
+	call	HAL_ENABLE_RX ; Also deletes any possibly received packets
+	UNMASK_IRQ4M ; Release card
+	pop		dx
+	clc
+SVC_04_CLEANUP:
+	pop		ax
+	SVC_CLEANUPM
+SVC_04 ENDP
+
+SVC_05 PROC FAR ;; terminate()
+	pop		bx ; Restore caller's BX
+	mov		dh,CANT_TERMINATE
+	stc
+	SVC_CLEANUPM
+SVC_05 ENDP
+
+SVC_06 PROC FAR ;; get_address()
+	pop		bx ; Restore caller's BX
+
+	push	ax
+	push	ds
+	mov		ds,bp ; Set DS = MEM
+
+SVC_06_CHK_SIZE:
+	cmp		cx,MAC_ADDRESS_TABLE_L ; Compare available buffer space to table Length
+	jae		SVC_06_CONT
+	mov		dh,NO_SPACE
+	stc		; Indicate error
+	jmp		SVC_06_CLEANUP
+SVC_06_CONT:
+	; Set DS:SI to MAC address table
+		; DS already set to MEM
+	push	si
+	push	di
+	mov		si,offset MAC_ADDRESS_TABLE
+	mov		cx,MAC_ADDRESS_TABLE_L ; set count to MAC_ADDRESS_TABLE_L
+	;; ES:DI = receive buffer
+	cld
+	rep		movsb ; Copy MAC address, modifies SI, DI, and CX
+	pop		di
+	pop		si
+	mov		cx,MAC_ADDRESS_TABLE_L
+	clc
+SVC_06_CLEANUP:
+	pop		ds
+	pop		ax
+	SVC_CLEANUPM
+SVC_06 ENDP
+
+SVC_07 PROC FAR ;; reset_interface()
+	pop		bx ; Restore caller's BX
+	mov		dh,CANT_RESET
+	stc		; Indicate error condition
+	SVC_CLEANUPM
+SVC_07 ENDP
 
 PAGE
 DEBUG_PARA_ALIGN_MACRO
 INT_SVC_TABLE LABEL WORD
-	dw		OFFSET SVC_00 ; driver_error
-	dw		OFFSET SVC_01 ; driver_info
-	dw		OFFSET SVC_02 ; access_type
+	dw		OFFSET SVC_00 ; driver_error()
+	dw		OFFSET SVC_01 ; driver_info()
+	dw		OFFSET SVC_02 ; access_type()
+	dw		OFFSET SVC_03 ; release_type()
+	dw		OFFSET SVC_04 ; send_pkt()
+	dw		OFFSET SVC_05 ; terminate()
+	dw		OFFSET SVC_06 ; get_address()
+	dw		OFFSET SVC_07 ; reset_interface()
 INT_SVC_TABLE_L EQU $-INT_SVC_TABLE ; Length of table
 
+;; New methodolgy, pass a flag whether the card is in use or not
+debug_str_pkt_int_main db "API, SVC$"
 PKT_INT_MAIN PROC FAR
+	;; Called from SHIM 
 	;; BP = RESIDENT MEMORY SEGMENT IF NEEDED TO STORE / SWAP STACK FRAME
 	;; CAN'T CHANGE STACK UNLESS YOU CHECK IF RECV INTERRUPT IS UNMASKED
 	;; TO ENSURE ONLY 1 COPY OF THIS IS RUNNING!!!
 	; BP contains MEMOERYSHIM SEGMENT, MUST PRESERVE ALL REGISTERS EXCEPT FLAGS, return carry
+
 	sti ; Re-enable interrupts
-	push	si ; Save SI, used for temporary offset
-	push	ax ; Save caller's AL
-	mov		al,ah ; AH was SVC, move to al
-	xor		ah,ah ; AH = 0
-	sal		ax,1 ; SVC * 2 = INT_SVC_TABLE entry
-	mov		si,ax ; SI = INT_SVC_TABLE entry
-	pop		ax ; Restore caller's AL
-	cmp		si,INT_SVC_TABLE_L ; Check if command is valid
-	jb		PKT_INT_MAIN_SVC_EXE ; if yes, execute
-	xor		si,si ; if no, force invalid command entry
-PKT_INT_MAIN_SVC_EXE:
-	WORD PTR CS:[SI + OFFSET INT_SVC_TABLE] ; will iret and clean stack on it's own, must pop SI
+	push	bx ; Save caller's BX, used for temporary offset
+	mov		bl,ah ; AH was SVC, move to bl
+	sal		bl,1 ; SVC * 2 = INT_SVC_TABLE entry
+	xor		bh,bh ; zero out upper address, valid BX values are 0-(14-1) decimal so this is safe
+	cmp		bl,INT_SVC_TABLE_L ; check if command is valid
+	jb		PKT_INT_MAIN_EXE ; if yes, continue
+	xor		bl,bl ; if no, force driver_error handler
+PKT_INT_MAIN_EXE: ;; Jump to service handler
+	;; Requirements
+	;; 0.) SVC entry: caller BX, caller BP on the stack (needed for exit)
+	;; 1.) SVC should pop BX
+	;; 2.) If using card, check (needs AX) FORCE_MASK_IRQ_CHECKM
+	;;		a.) If card available	: DISABLE_RX (needs AX, DX)
+	;;								: DO STUFF
+	;;								: ENABLE_RX (needs AX,DX)
+	;;								: UNMASK_IRQ4M (needs AX)
+	;;								: Clear Carry
+	;;		b.) If card unavailable : Set DH, Set Carry
+	;; 3.) Set/clear IRET stack carry (+6), pop BP, iret
+	jmp		WORD PTR CS:[BX + OFFSET INT_SVC_TABLE] ; BX contains service handler offset
 	DEBUG_PARA_ALIGN_MACRO
 PKT_INT_MAIN ENDP
+
+;;;;;;;;;;
+
+;	sti ; Re-enable interrupts
+;	push	si ; Save SI, used for temporary offset
+;	push	ax ; Save caller's AL
+;	mov		al,ah ; AH was SVC, move to al
+;	xor		ah,ah ; AH = 0
+;	sal		ax,1 ; SVC * 2 = INT_SVC_TABLE entry
+;	mov		si,ax ; SI = INT_SVC_TABLE entry
+;	pop		ax	; restore caller's AL 
+;	cmp		si,INT_SVC_TABLE_L ; Check if command is valid
+;	jb		PKT_INT_MAIN_EXE ; if yes, continue
+;	xor		si,si ; if no, force error command
+;	pop		ax ; Restore caller's AX
+;PKT_INT_MAIN_EXE: ;; Jump to service handler
+	;; Requirements
+	;; 0.) SVC entry: caller SI, caller BP on the stack (needed for exit)
+	;; 1.) SVC should pop SI
+	;; 2.) If using card, check (needs AX) FORCE_MASK_IRQ_CHECKM
+	;;		a.) If card available	: DISABLE_RX (needs AX, DX)
+	;;								: DO STUFF
+	;;								: ENABLE_RX (needs AX,DX)
+	;;								: UNMASK_IRQ4M (needs AX)
+	;;								: Clear Carry
+	;;		b.) If card unavailable : Set DH, Set Carry
+	;; 3.) Set/clear IRET stack carry (+6), pop BP, iret
+;	jmp		WORD PTR CS:[SI + OFFSET INT_SVC_TABLE]
+;	DEBUG_PARA_ALIGN_MACRO
+;PKT_INT_MAIN ENDP
 
 debug_str_int_called db "Interrupt!$"
 debug_str_int_nmi db "NMI Mask$"
@@ -364,8 +538,12 @@ RCV_INT_MAIN PROC FAR ; SHIM needs to point here for RX
 
 ;	DO THINGS, preserve all registers used
 	call	HAL_DISABLE_RX ; Disable further reception, uses AX/DX/FLAGS
-	;UTILM_PRINT_STRN debug_str_int_called
 	
+	;; Check if driver is actively being used
+	mov		ax,[driver_in_use]
+	cmp		ax,1
+	jne		RCV_INT_RANGE_JMP_DONE ;; driver not in use, exit
+
 	;; Read Packet Size, check for weird error, and save
 	call	HAL_GET_PACKET_SIZE ; get packet size into AX, uses AX/DX/FLAGS
 	cmp		ax,0h ; just in case packet is somehow zero?
@@ -402,51 +580,35 @@ RCV_INT_MAIN PROC FAR ; SHIM needs to point here for RX
 	push	di
 	;push	ds ; already preserved
 	push	es
-	
+
 	;;;;;; SAFETY ZONE
-	;; Copy packet to internal buffer
-	mov		ax,ds
-	mov		es,ax ; Set ES to SHIM
-	mov		di,offset pkt_mem_buffer ; DI = offset
-	mov		cx,[packet_size] ; CX = packet size in bytes
-	call	HAL_RX
 	
-	;; LOOP FOR each registered caller, notify them about the packet 
-	xor		bx,bx ; Start at handle 0
-RCV_INT_NOTIFY_LOOP: 
-	xor		ax,ax ; First call, flag is 0
+	;; DS = MEMORY SHIM
+	
+	;; Ask receiver if it can take the packet
+	xor		ax,ax ; first call flag is 0
 	mov		cx,[packet_size] ; CX = packet size in bytes
-	push	bx ; Save BX
-	call	DWORD PTR [receiver_call_ptrs + bx] ; destroys everything except DS, SS, SP, and FLAGS
-	pop		bx ; Restore BX
-		; Check if caller gave us a good buffer back. ES:DI == 0:0 if buffer bad, else good
+	call	DWORD PTR [receive_offset] ; returns ES:DI buffer, 0:0 if can't hold the packet
+	; Check if caller gave us a good buffer back. ES:DI == 0:0 if buffer bad, else good
 	cmp		di,0h
-	jne		RCV_INT_NOTIFY_LOOP_COPY ; if DI != 0, we know we got a good buffer!
+	jne		RCV_INT_NOTIFY_COPY
 	mov		ax,es
 	cmp		ax,0h ; if DI was 0, it may still be valid unless ES is also 0
-	je		RCV_INT_NOTIFY_LOOP_UPDATE ; If 0:0, this caller doesn't want it, update loop
-RCV_INT_NOTIFY_LOOP_COPY: ;; Caller does want it, ES:DI has buffer
-	; DS is still set to SHIM
-	push	di ; Save DI, contains recv buffer offset
-	mov		si,offset pkt_mem_buffer ; internal buffer offset
+	je		RCV_INT_NOTIFY_DONE ; Bail out
+RCV_INT_NOTIFY_COPY: ; Ok go-ahead and copy	
+	;; ES:DI is the destination
+	push	di
 	mov		cx,[packet_size]
-	cld		; Forward direction
-	rep		movsb
-	pop		si ; pop DI into SI, contains recv buffer OFFSET
-	
-	push	ds ; Save DS SHIM
+	call	HAL_RX ; copy packet to buffer
+	pop		si
+	mov		cx,[packet_size]
+	push	es ; Pushed Buffer Segment
 	mov		ax,ds
-	mov		es,ax ; now DS = BUFFER
-	mov		ax,1h ; Second call flag
-	mov		cx,es:[packet_size] ; CX = packet size in bytes
-	push	bx ; Save receiver offset
-	call	DWORD  PTR es:[receiver_call_ptrs + bx] ; destroys everything except DS, SS, SP, and FLAGS
-	pop		bx ; Restore receiver offset
-	pop		ds ; put back DS=SHIM
-RCV_INT_NOTIFY_LOOP_UPDATE:
-	add		bx,4h
-	cmp		bx,SIZE receiver_call_ptrs
-	jb		RCV_INT_NOTIFY_LOOP
+	mov		es,ax ; ES = MEMORY SHIM
+	pop		ds ; DS:SI = buffer
+	mov		ax,1 ; second call flag
+	call	DWORD PTR ES:[receive_offset]
+RCV_INT_NOTIFY_DONE:
 	;;;;;; END SAFETY ZONE
 
 	;; Pop EVERYTHING
@@ -495,12 +657,6 @@ debug_str_handle db "Handle$"
 debug_str_size db "Size$"
 debug_str_call db "Call$"
 RCV_DUMMY_RET PROC FAR
-;	UTILM_PRINT_WREG debug_str_handle,bx
-;	UTILM_PRINT_NEWLINE
-;	UTILM_PRINT_WREG debug_str_call,ax
-;	UTILM_PRINT_NEWLINE
-;	UTILM_PRINT_WREG debug_str_size,cx
-;	UTILM_PRINT_NEWLINE
 	xor		di,di
 	mov		es,di
 	ret
@@ -522,7 +678,6 @@ IF DEBUG
 	UTILM_PRINT_STRN debug_txrx_reset
 ENDIF
 	MASK_IRQ4M
-	;call	MASK_IRQ4 ; ensure no gibberish receives can occur
 	call	HAL_RESET ; Reset the card
 	; Intentionally leaves card masked, driver will properly initialize later
 	ret ; Far Return
@@ -659,16 +814,11 @@ PAGE
 
 
 RESET_RECV_CALLEE PROC NEAR
-	
-	xor		bx,bx
+	xor		ax,ax
+	mov		[driver_in_use],ax ; Set driver to not in use
+	mov		[receive_offset],offset RCV_DUMMY_RET 
 	mov		ax,cs
-RESET_RECV_CALLEE_LOOP:
-	mov		word ptr [receiver_call_ptrs+bx],offset RCV_DUMMY_RET 
-	add		bx,2
-	mov		word ptr [receiver_call_ptrs+bx],ax ; Segment
-	add		bx,2
-	cmp		bx,SIZE receiver_call_ptrs ; number of bytes
-	jb		RESET_RECV_CALLEE_LOOP
+	mov		[receive_segment],ax
 	ret
 RESET_RECV_CALLEE ENDP
 
@@ -686,10 +836,13 @@ IF ROM ; If RAM, not necessary as we will use the existing resident block
 	mov		ds,ax ; DS=CODE
 	mov		si,offset MEMORYSHIMBEGIN
 		; Set word count and direction
-	mov		cx,(offset MEMORYSHIMEND - offset MEMORYSHIMBEGIN)/2 ; words
+	;mov		cx,(offset MEMORYSHIMEND - offset MEMORYSHIMBEGIN)/2 ; words
+	mov		cx,(offset MEMORYSHIMEND - offset MEMORYSHIMBEGIN) ; bytes
+	
 	cld
-		; Move!
-	rep		movsw
+	; Move!
+	;rep		movsw
+	rep		movsb
 	pop		ds ; restore DS=PSP
 ENDIF
 	; 1.) Fix PSP:call	FAR PTR PLACEHOLDER_JMP to CS:PKT_INT_MAIN
@@ -901,8 +1054,7 @@ LOAD: ; 2a.)  Need to load ourselves and then TSR + RECV
 	call	LOAD_RESIDENT_TSR
 	jc		EXITCLEAN ; If we failed, exit
 	call	INIT_ADAPTER
-	;call	UNMASK_IRQ4
-	UNMASK_IRQ4M
+	;UNMASK_IRQ4M  ;- won't smash our stack because card not marked as in use
 EXITTSR: ; Terminate, free up additional memory
 	; DS is already PSP
 	mov		dx,RESIDENT_BLOCK_PARA

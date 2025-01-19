@@ -184,7 +184,7 @@ ECON2_REGISTER			EQU 1Eh
 	ECON2_PKTDEC_BIT		EQU 40h
 ECON1_REGISTER			EQU 1Fh
 	ECON1_RXEN_BIT		EQU 04h
-	ECON1_TXRTS_BIT		EQU 08h
+	ECON1_TXRTS_BIT		EQU 08h ; 1 if attempting to transmit
 	
 ; PHY
 PHCON1_REGISTER			EQU 00h
@@ -746,6 +746,7 @@ HW_READ_BUFFER_MEMORY PROC NEAR
 RBM_LOOP:
 	; get next byte
 	call	HW_TXRX_BYTE ; stored in al
+	cld
 	stosb	; save byte, inc di
 	loop	RBM_LOOP ; dec CX
 	HW_CS_END		; Sets DX
@@ -786,6 +787,7 @@ HW_WRITE_BUFFER_MEMORY PROC NEAR
 	call	HW_TXRX_BYTE ; Send initial opcode
 WBM_LOOP:
 	; get next byte
+	cld
 	lodsb	; write byte to ds:[si], inc si
 	mov		ah,al ; move over to ah for transmit
 	call	HW_TXRX_BYTE ; stored in al
@@ -1228,6 +1230,72 @@ HW_SET_EWRPT PROC NEAR
 	pop		bx
 	ret
 HW_SET_EWRPT ENDP
+
+;!! PROC
+;!!		HW_SEND
+;!! Input
+;!!		CX = end size
+;!! Output
+;!!		NONE
+;!! Uses directly
+;!!		AX, BX, flags
+;!! Calls
+;!!		HW_SET_CONTROLLER_BANK (destroys AX, DX, flags, ETH:BANK)
+;!!		HW_WRITE_REGISTER_LOW_HIGH (destroys AX, BX, DX, flags)
+;!! Dependencies destroy
+;!!		AX, BX, DX, flags, ETH: BANK
+;!! Directly preserves
+;!!		BX
+;!! Total destroy
+;!!		AX, DX, flags, ETH:BANK	
+HW_SEND PROC NEAR
+	mov		ah,BANK0
+	call	HW_SET_CONTROLLER_BANK
+	
+	;; Set ETXST (BANK0) to beginning of transmit buffer
+	push	bx
+	mov		ax,(ETXSTH_REGISTER SHL 8) OR ETXSTL_REGISTER
+	mov		bx,TX_ADDRESS_START
+	call	HW_WRITE_REGISTER_LOW_HIGH
+	
+	;; Set ETXND (BANK0) to end of transmit buffer
+	mov		ax,(ETXNDH_REGISTER SHL 8) OR ETXNDL_REGISTER
+	mov		bx,TX_ADDRESS_START
+	add		bx,cx
+	add		bx,5 ; (Packet Size (CX) + 1 (control byte) + 4 (CRC bytes)
+	call	HW_WRITE_REGISTER_LOW_HIGH
+	pop		bx
+	
+	;; Set ECON1_TXRTS_BIT to initiate transmit
+	mov		ax,(ECON1_REGISTER SHL 8) OR ECON1_TXRTS_BIT
+	call	HW_BIT_FIELD_SET	
+
+	ret
+HW_SEND ENDP
+
+;!! PROC
+;!!		HW_WAIT_SEND_COMPLETE
+;!! Input
+;!!		NONE
+;!! Output
+;!!		NONE
+;!! Uses directly
+;!!		AX, flags
+;!! Calls
+;!!		HW_READ_ETH_REGISTER (destroys AX, DX, flags)
+;!! Dependencies destroy
+;!!		AX, DX, flags
+;!! Directly preserves
+;!!		NONE
+;!! Total destroy
+;!!		AX, DX, flags	
+HW_WAIT_SEND_COMPLETE PROC NEAR
+	mov		ah,ECON1_REGISTER ; (all banks)
+	call	HW_READ_ETH_REGISTER ; returns AL = ECON1 value
+	test	al,ECON1_TXRTS_BIT ; 1 if attempting to transmit
+	jnz		HW_WAIT_SEND_COMPLETE ; If not zero, loop until transmit complete
+	ret
+HW_WAIT_SEND_COMPLETE ENDP
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -1810,64 +1878,54 @@ HW_VERIFY_CONTROLLER_PHY_T:
 HW_VERIFY_CONTROLLER_PHY ENDP
 ENDIF
 
-;TXRX_ENABLE_RX_INT PROC NEAR
-	;push	ax
-;	mov		ax,(EIE_REGISTER SHL 8) OR (EIE_PKTIE)
-;	call	HW_BIT_FIELD_SET
-	;pop		ax
-;TXRX_ENABLE_RX_INT ENDP
-
-;TXRX_ENABLE_GLOBAL_INT PROC NEAR
-	;push	ax
-;	mov		ax,(EIE_REGISTER SHL 8) OR (EIE_INTIE)
-;	call	HW_BIT_FIELD_SET
-	;pop		ax
-;	ret
-;TXRX_ENABLE_GLOBAL_INT ENDP
-
-;SETUP_CONTROLLER_INT PROC NEAR
-;	call	TXRX_ENABLE_RX_INT
-;	call	TXRX_ENABLE_GLOBAL_INT
-;	ret
-;SETUP_CONTROLLER_INT ENDP
-
-;TXRX_ENABLE_RX PROC NEAR
-;	push	ax
-;	mov		ax,(ECON1_REGISTER SHL 8) OR (ECON1_RXEN_BIT)
-;	call	HW_BIT_FIELD_SET
-;	pop		ax
-;	ret
-;TXRX_ENABLE_RX ENDP
-
-;txrx_str_reset db "Resetting...$"
-;TXRXH_INIT PROC NEAR ;; USED TO BE TXRXH_RESET
-;	call	TXRX_SOFT_RESET
-;	UTILM_PRINT_STRN txrx_str_reset ; DEBUG API
-	
-;	call	HW_SETUP_CONTROLLER_BUFFERS
-	;call	HW_VERIFY_CONTROLLER_BUFFERS
-	
-;	call	HW_SETUP_CONTROLLER_FILTERS
-	;call	HW_VERIFY_CONTROLLER_FILTERS
-	
-	;call	HW_SETUP_CONTROLLER_MODE ; Not necessary since ECON2 is already in autoinc
-	;call	HW_VERIFY_CONTROLLER_MODE
-	
-;	call	HW_SETUP_CONTROLLER_MAC
-	;call	HW_VERIFY_CONTROLLER_MAC
-	
-;	call	HW_SETUP_CONTROLLER_PHY
-	;call	HW_VERIFY_CONTROLLER_PHY
-	
-;	call	SETUP_CONTROLLER_INT
-	
-;	call	TXRX_ENABLE_RX ; enable receiving
-	
-;	ret
-;TXRXH_INIT ENDP
-
-
 ;; HAL Functions - exposed to the Packet Driver
+
+;!! PROC
+;!!		HAL_SEND_PKT
+;!! Input
+;!!		DS:SI = PCjr Memory containing packet
+;!!		CX = packet_size
+;!! Output
+;!!		NONE
+;!! Uses directly
+;!!		AX 
+;!! Calls
+;!!		HW_WAIT_SEND_COMPLETE (destroys AX, DX, flags)
+;!!		HW_SET_EWRPT (destroys AX, DX, flags, ETH:BANK)
+;!!		WRITE_BUFFER_MEMORY_BYTE (destroys AX, DX, flags)
+;!!		WRITE_BUFFER_MEMORY (destroys SI, AX, CX, DX, flags)
+;!!		HW_SET_ETXST_ND
+;!! Dependencies destroy
+;!!		AX, DX, flags, ETH:BANK
+;!! Directly preserves
+;!!		SI, CX
+;!! Total destroy
+;!!		AX, DX, flags
+HAL_SEND_PKT PROC NEAR
+
+	;; 0.) Wait until previous send (if any) completes
+	call	HW_WAIT_SEND_COMPLETE ; will loop until free
+
+	;; 1.) Set Write Pointer
+	mov		ax,TX_ADDRESS_START
+	call	HW_SET_EWRPT
+	
+	;; 2.) Write Ethernet controller packet control byte
+	mov		al,SEND_CTRL_BYTE
+	call	HW_WRITE_BUFFER_MEMORY_BYTE ; expects AL to be the byte
+	
+	;; 3.) Write rest of packet to buffer
+	push	si
+	push	cx
+	call	HW_WRITE_BUFFER_MEMORY
+	pop		cx
+	pop		si
+	
+	;; 4.) Tell card where and how big packet is and send it
+	call	HW_SEND
+	
+	ret
+HAL_SEND_PKT ENDP
 
 ;!! PROC
 ;!!		HAL_GET_PACKET_SIZE
