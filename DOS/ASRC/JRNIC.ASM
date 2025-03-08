@@ -373,12 +373,16 @@ SVC_04 PROC FAR ;; send_pkt()
 	jmp		SVC_04_CLEANUP
 SVC_04_SND_PKT:
 	push	dx
-	call	HAL_DISABLE_RX
+	;; 20250302 - currently disable
+	;call	HAL_DISABLE_RX
 	call	HAL_SEND_PKT
-	call	HAL_ENABLE_RX ; Also deletes any possibly received packets
+	;; 20250302 - release card
 	UNMASK_IRQ4M ; Release card
+	;call	HAL_ENABLE_RX ; Also deletes any possibly received packets
+;	UNMASK_IRQ4M ; Release card
 	pop		dx
-	clc
+	;; 20250302 - carry set/cleared by HAL_SEND_PKT
+;	clc
 SVC_04_CLEANUP:
 	pop		ax
 	SVC_CLEANUPM
@@ -520,26 +524,36 @@ RCV_INT_MAIN PROC FAR ; SHIM needs to point here for RX
 	; - Must ACK PIC IRQ (unconditionally)
 	; - Must check if card is in use (for sanity)
 	; - Must clear jrNIC interrupt line (if not in use)
+
+;; 20250203 - mask before re-enabling interrupts to prevent a send from interrupting us
+	MASK_IRQ4M				; Mask interrupts Unconditionally
+							; since we got here via interrupt and haven't (yet)
+							; re-enabled them, nothing else can be using the card
+							; TECHNICALLY a bad NMI could've re-enabled interrupts
+							; but also then they would run their code and return
+							; before we continue
+	
+	;; Card not in use and is now marked for use							
 	sti						; Re-enable interrupts
 	push	ds				; Preserve interruptee's DS
 	push	dx				; Preserve DX
 	push	bp				; Preserve BP
 	mov		ds,ax			; Set DS to MEMORYSHIMBEGIN segment
-	FORCE_MASK_IRQ_CHECKM 	; Mask IRQ4/Check if already masked
+;	FORCE_MASK_IRQ_CHECKM 	; Mask IRQ4/Check if already masked
 									; Yes this is here...
 									; Technically it shouldn't be needed
 									; because if something was using
 									; the card it would mask IRQ preventing
 									; out entry, but for everyone's sanity
 									; we'll keep this check here
-	jnz		RCV_INT_RANGE_JMP_END	; Card is in use, bail, should NOT be possible
-	
-	;; Card not in use and is now marked for use
+;	jnz		RCV_INT_RANGE_JMP_END	; Card is in use, bail, should NOT be possible
 
 ;	DO THINGS, preserve all registers used
 	call	HAL_DISABLE_RX ; Disable further reception, uses AX/DX/FLAGS
 	
 	;; Check if driver is actively being used
+	;; This is a safety to prevent receiption while the DRIVER
+	;; Is being unloaded or the receiver is disconnecting
 	mov		ax,[driver_in_use]
 	cmp		ax,1
 	jne		RCV_INT_RANGE_JMP_DONE ;; driver not in use, exit

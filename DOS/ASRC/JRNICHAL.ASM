@@ -1485,11 +1485,23 @@ HW_SETUP_CONTROLLER_FILTERS PROC NEAR
 	;call	HW_WRITE_REGISTER
 	;mov		ax,(EPMCSL_REGISTER SHL 8) OR 0F9h
 	;call	HW_WRITE_REGISTER
+	
+	;;; THIS MAY BE BROKEN
+	
 	mov		ah,BANK1
 	call	HW_SET_CONTROLLER_BANK
-	mov		ax,(EPMCSH_REGISTER SHL 8) OR EPMCSL_REGISTER
-	mov		bx,(0F7h SHL 8) OR 0F9h
-	call	HW_WRITE_REGISTER_LOW_HIGH
+	
+	mov		ax,(EPMCSH_REGISTER SHL 8) OR 0F7h
+	call	HW_WRITE_REGISTER
+
+	mov		ah,BANK1
+	call	HW_SET_CONTROLLER_BANK
+	mov		ax,(EPMCSL_REGISTER SHL 8) OR 0F9h
+	call	HW_WRITE_REGISTER
+	
+	;mov		ax,(EPMCSH_REGISTER SHL 8) OR EPMCSL_REGISTER
+	;mov		bx,(0F7h SHL 8) OR 0F9h
+	;call	HW_WRITE_REGISTER_LOW_HIGH
 	
 	pop		bx
 IF DEBUG_VERIFY_FILTER
@@ -1904,8 +1916,17 @@ ENDIF
 HAL_SEND_PKT PROC NEAR
 
 	;; 0.) Wait until previous send (if any) completes
-	call	HW_WAIT_SEND_COMPLETE ; will loop until free
+;	call	HW_WAIT_SEND_COMPLETE ; will loop until free
 
+	;; 20250302 - check to mimic old one
+	mov		ah,ECON1_REGISTER
+	call	HW_READ_ETH_REGISTER ; al = result
+	and		al,ECON1_TXRTS_BIT
+	jz		HAL_SEND_PKT_CONT ; No transmission currently occuring
+	;; Otherwise Return BAD
+	stc
+	ret
+HAL_SEND_PKT_CONT:
 	;; 1.) Set Write Pointer
 	mov		ax,TX_ADDRESS_START
 	call	HW_SET_EWRPT
@@ -1924,6 +1945,9 @@ HAL_SEND_PKT PROC NEAR
 	;; 4.) Tell card where and how big packet is and send it
 	call	HW_SEND
 	
+	;; 5.) Wait until complete to continue
+	call	HW_WAIT_SEND_COMPLETE ; will loop until free
+	clc ; Clear carry
 	ret
 HAL_SEND_PKT ENDP
 
