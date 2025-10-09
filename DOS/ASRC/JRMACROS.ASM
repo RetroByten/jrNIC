@@ -1,35 +1,85 @@
+; Input: None
+; Output: 
+;	jz, zero flag set (1) if interrupt was unmasked before call (Active,0)
+;	jnz, zero flag clear (0) if interrupt was masked before call (card in use,1)
+;	IRQ4 Masked
+; Destroys AH, Flags
+FORCE_MASK_IRQ_CHECKM MACRO
+	in		al,port_pic_data	; Read current IRQ masks
+	mov		ah,al				; Save current IRQ masks
+	or		al,mask_modem_bit	; Unconditionally mask (if it's already masked its no loss)
+	test	ah,mask_modem_bit	; Check if saved IRQ masks has modem masked
+ENDM
+
+;!! MACRO
+;!!		MASK_IRQ4M
+;!! Input
+;!!		NONE
+;!! Output
+;!!		NONE
+;!! Uses directly
+;!!		AX, flags
+;!! Calls
+;!!		NONE
+;!! Dependencies destroy
+;!!		AX, flags
+;!! Directly preserves
+;!!		NONE
+;!! Total destroy
+;!!		AX, flags
+MASK_IRQ4M MACRO
+	in		al,port_pic_data
+	or		al,mask_modem_bit ; 0001 0000 mask IRQ off
+	out		port_pic_data,al
+ENDM
+
+;!! MACRO
+;!!		UNMASK_IRQ4M
+;!! Input
+;!!		NONE
+;!! Output
+;!!		NONE
+;!! Uses directly
+;!!		AX, flags
+;!! Calls
+;!!		NONE
+;!! Dependencies destroy
+;!!		NONE
+;!! Directly preserves
+;!!		NONE
+;!! Total destroy
+;!!		AX, flags
+UNMASK_IRQ4M MACRO
+	in		al,port_pic_data
+	and		al,NOT mask_modem_bit ; 1110 1111 clear/activate IRQ
+	out		port_pic_data,al ; write interrupt controller mask reg to unmask modem
+ENDM
+
+;!! MACRO
+;!!		ACK_IRQM
+;!! Input
+;!!		NONE
+;!! Output
+;!!		NONE
+;!! Uses directly
+;!!		AX
+;!! Calls
+;!!		NONE
+;!! Dependencies destroy
+;!!		NONE
+;!! Directly preserves
+;!!		NONE
+;!! Total destroy
+;!!		AX
+ACK_IRQM MACRO
+	mov		al,val_pic_eoi		; Unconditionally ACK hardware Interrupt
+	out		port_pic_cmd,al
+ENDM
+
 PARA_ALIGN_MACRO MACRO
 	IF ($-BEGINOFPROG) MOD 16 ; If not paragraph aligned
 		ORG ($-BEGINOFPROG)+16-(($-BEGINOFPROG) MOD 16) ; Round up
 	ENDIF
-ENDM
-
-DEBUG_PARA_ALIGN_MACRO MACRO ;; Only used for helping debug
-	IF ($-BEGINOFPROG) MOD 16 ; If not para aligned
-		ORG ($-BEGINOFPROG)+16-(($-BEGINOFPROG) MOD 16) ; Round up
-	ENDIF
-	db "AAAABBBBCCCCDDDD"
-ENDM
-
-PKT_DRIVER_SIGNATURE_MACRO MACRO
-	drvr_signature	db "PKT DRVR",00h
-ENDM
-
-PROGRAM_SIGNATURE_MACRO MACRO ; Use Once
-	drv_signature:
-	drv_vendor		db "RETROBYTEN"
-	drv_card		db "JRNIC$" ; Used to detect if already running
-	drv_signature_end:
-	DEBUG_PARA_ALIGN_MACRO
-ENDM
-
-DRIVER_INFO_MACRO MACRO ; Use Once
-	DRV_PKT_VERSION dw 0001h ; VERSION, BX
-	DRV_IFCLASS db 1 ; CLASS, CH
-	DRV_IFTYPE dw 0FFFFh ; TYPE, DX
-	DRV_IFNUM db 0 ; NUMBER, CL
-	DRV_NAME db "jrNIC$",0 ; NAME, DS:SI
-	DRV_FUNC db 1 ; FUNCTIONALITY, AL
 ENDM
 
 ;!! MACRO

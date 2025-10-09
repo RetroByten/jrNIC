@@ -5,6 +5,10 @@ int_bios_video_10					EQU 10h
 	svc_bios_video_tty_0E				EQU 0Eh
 	svc_bios_video_getmode_0F			EQU 0Fh
 		val_bios_video_col_white_0F			EQU 0Fh
+int_bios_keyboard_16				EQU 16h
+	svc_keyboard_read_key				EQU	00h
+	svc_keyboard_get_state				EQU 01h
+		val_esc_key							EQU 1Bh ; 27 decimal
 int_dos_21							EQU	21h
     svc_dos_print_char_02				EQU 02h
 	svc_dos_print_str_09				EQU 09h
@@ -66,4 +70,5 @@ PSP_SIZE EQU 100h ; DOS 2.1 Technical Reference (p.6-5), PARA ALIGNED
 ;STACK_SIZE EQU STACK_DOS_SIZE + STACK_USER_SIZE ; 100h
 STACK_SIZE EQU 200h
 PARA_SIZE EQU 0Fh
+
 

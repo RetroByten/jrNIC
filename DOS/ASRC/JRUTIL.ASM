@@ -37,6 +37,16 @@
 ;!!	Total destroy
 ;!!		AX, flags
 UTIL_PRINT_CHAR PROC NEAR ; Assumes al or constant
+;IF DOS
+;	; DOS = 1, use DOS functions
+;	push	dx ; Preserve DX
+;	mov		dl,al
+;	mov		ah,svc_dos_print_char_02 ; DOS Int 21 Display Output SVC
+;	int		int_dos_21
+;	pop		dx
+;	ret
+;ELSE
+;	; DOS = 0, use BIOS functions
 	push	bx
 	push	ax ; Temporarily store AL
 	mov		ah,svc_bios_video_getmode_0F ; Get video mode for page
@@ -48,6 +58,7 @@ UTIL_PRINT_CHAR PROC NEAR ; Assumes al or constant
 	int		int_bios_video_10
 	pop		bx
 	ret
+;ENDIF
 UTIL_PRINT_CHAR ENDP
 
 ;!! PROC
@@ -122,6 +133,7 @@ UTIL_PRINT_STR ENDP
 ;!! Input
 ;!!		DS = segment of message
 ;!!		SI = offset of message
+;!!		CX = number of bytes
 ;!! Output
 ;!!		NONE (prints to screen TTY)
 ;!! Uses directly
