@@ -169,12 +169,13 @@ INT_PKT_SVC_03 PROC FAR ;; 6.5 release_type()
 	mov		[receive_segment],ax 
 	mov		[receive_offset],offset RCV_DUMMY_RET
 
+;; 20251009 - Only enabling when an app is actively receiving
 	;; Enable reception (clear out any pending packet pointers)
-	call HAL_ENABLE_RX ; AX/DX/FLAGS
+;	call HAL_ENABLE_RX ; AX/DX/FLAGS
 	
 	;; Release call
-	UNMASK_IRQ4M ; Uses AX, flags
-	
+;	UNMASK_IRQ4M ; Uses AX, flags
+;; 20251009 - End
 	pop		dx ; Restore registers
 	pop		ax
 	pop		ds
@@ -504,10 +505,13 @@ MAIN PROC FAR
 	; Reset, initialize, and enable card
 	call	HAL_RESET
 	call	HAL_INIT
-	call	HAL_ENABLE_RX
+;; 20251009 - Only enabling when an app is actively receiving
+;	call	HAL_ENABLE_RX
 	
 	; Umask RCV HW IRQ
-	UNMASK_IRQ4M ; Uses AX, Flags
+;	UNMASK_IRQ4M ; Uses AX, Flags
+;; 20251009 - END
+	
 	
 	; TSR
 	mov		dx,RESIDENT_PARA  ; DS:DX = Resident Location + Paras to retain
