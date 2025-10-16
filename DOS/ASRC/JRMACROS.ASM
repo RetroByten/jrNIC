@@ -76,6 +76,51 @@ ACK_IRQM MACRO
 	out		port_pic_cmd,al
 ENDM
 
+;!! MACRO
+;!!		MASK_NMI
+;!! Input
+;!!		NONE
+;!! Output
+;!!		NONE
+;!! Uses directly
+;!!		AX, flags
+;!! Calls
+;!!		NONE
+;!! Dependencies destroy
+;!!		AX, flags
+;!! Directly preserves
+;!!		NONE
+;!! Total destroy
+;!!		AX, flags
+MASK_NMI MACRO
+	mov		al,nmi_disable
+	out		port_nmi_mask_reg,al
+ENDM
+
+;!! MACRO
+;!!		UNMASK_NMI
+;!! Input
+;!!		NONE
+;!! Output
+;!!		NONE
+;!! Uses directly
+;!!		AX, flags
+;!! Calls
+;!!		NONE
+;!! Dependencies destroy
+;!!		AX, flags
+;!! Directly preserves
+;!!		NONE
+;!! Total destroy
+;!!		AX, flags
+UNMASK_NMI MACRO
+	mov		al,nmi_enable
+	out		port_nmi_mask_reg,al
+	in		al,port_nmi_mask_reg	; Read Port to clear latch,
+									; For case a key was pressed
+									; while NMI was masked
+ENDM
+
 PARA_ALIGN_MACRO MACRO
 	IF ($-BEGINOFPROG) MOD 16 ; If not paragraph aligned
 		ORG ($-BEGINOFPROG)+16-(($-BEGINOFPROG) MOD 16) ; Round up

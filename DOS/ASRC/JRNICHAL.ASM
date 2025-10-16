@@ -237,13 +237,13 @@ SEND_CTRL_BYTE EQU 00h
 
 %OUT Processing jrNICHAL MACROS
 ;!! MACRO 
-;!!		HW_CS_HIGH
+;!!		HWB_CS_HIGH
 ;!! Input
 ;!!		NONE
 ;!! Output
 ;!!		DX = eth_write_cs_high
 ;!! Uses directly
-;!!		DX, AL(not affected)
+;!!		DX,AL(not affected)
 ;!! Calls
 ;!!		NONE
 ;!! Dependencies destroy
@@ -252,20 +252,20 @@ SEND_CTRL_BYTE EQU 00h
 ;!!		NONE
 ;!! Total destroy
 ;!!		DX
-HW_CS_HIGH MACRO
+HWB_CS_HIGH MACRO
 	mov		dx,eth_write_cs_high	; Set DX
 	out		dx,al					; Set ethernet controller CS line high, al is not affected
 ENDM
 
 ; Destroys DX
 ;!! MACRO
-;!!		HW_CS_LOW
+;!!		HWB_CS_LOW
 ;!! Input
 ;!!		NONE
 ;!! Output
 ;!!		DX = eth_read_write_bit
 ;!! Uses directly
-;!!		DX, AL(not affected)
+;!!		DX,AL(not affected)
 ;!! Calls
 ;!!		NONE
 ;!! Dependencies destroy
@@ -274,14 +274,14 @@ ENDM
 ;!!		NONE
 ;!! Total destroy
 ;!!		DX
-HW_CS_LOW MACRO
+HWB_CS_LOW MACRO
 	mov		dx,eth_write_cs_low		; Set DX
 	out		dx,al					; Set ethernet controller CS line low, al is irrelevant
 	mov		dx,eth_read_write_bit	; Set DX to prepare for read/write op	
 ENDM
 
 ;!! MACRO
-;!!		HW_CS_START
+;!!		HWB_CS_START
 ;!! Input
 ;!!		NONE
 ;!! Output
@@ -289,21 +289,21 @@ ENDM
 ;!! Uses directly
 ;!!		NONE
 ;!! Calls
-;!!		HW_CS_HIGH (destroys DX)
-;!!		HW_CS_LOW	(destroys DX)
+;!!		HWB_CS_HIGH (destroys DX)
+;!!		HWB_CS_LOW	(destroys DX)
 ;!! Dependencies destroy
 ;!!		DX
 ;!! Directly preserves
 ;!!		NONE	
 ;!! Total destroy
-;!!		DX	
-HW_CS_START MACRO
-	HW_CS_HIGH ; HW_CS_HIGH first to ensure fresh start
-	HW_CS_LOW ; HW_CS_LOW to initialize transfer
+;!!		DX
+HWB_CS_START MACRO
+	HWB_CS_HIGH ; HWB_CS_HIGH first to ensure fresh start
+	HWB_CS_LOW ; HWB_CS_LOW to initialize transfer
 ENDM
 
 ;!! MACRO
-;!!		HW_CS_END
+;!!		HWB_CS_END
 ;!! Input
 ;!!		NONE
 ;!! Output
@@ -311,21 +311,21 @@ ENDM
 ;!! Uses directly
 ;!!		NONE
 ;!! Calls
-;!!		HW_CS_HIGH (destroys DX)
+;!!		HWB_CS_HIGH (destroys DX)
 ;!! Dependencies destroy
 ;!!		DX
 ;!! Directly preserves
 ;!!		NONE
 ;!! Total destroy
-;!!		DX	
-HW_CS_END MACRO
-	HW_CS_HIGH ; HW_CS_HIGH first to end transfer
+;!!		DX
+HWB_CS_END MACRO
+	HWB_CS_HIGH ; HWB_CS_HIGH first to end transfer
 ENDM
 
 ;!! MACRO
-;!!		HW_TXRX_BIT
+;!!		HWB_TXRX_BIT
 ;!! Input
-;!!		HW_CS_START was called previously
+;!!		HWB_CS_START was called previously
 ;!!		AH = nxxx xxxx - next bit to transmit
 ;!!		DX = eth_read_write_bit
 ;!! Output
@@ -341,7 +341,7 @@ ENDM
 ;!!		NONE
 ;!! Total destroy
 ;!!		AX, flags
-HW_TXRX_BIT MACRO
+HWB_TXRX_BIT MACRO
 	in		al,dx	; Read low bit of receive
 	and		al,1	; Only use low bit, other bits masked to 0
 	xchg	ah,al	; Swap AH, AL, AL = transmit now
@@ -349,9 +349,9 @@ HW_TXRX_BIT MACRO
 ENDM
 
 ;!! MACRO
-;!!		HW_TXRX_SHIFT
+;!!		HWB_TXRX_SHIFT
 ;!! Input
-;!!		HW_CS_START was called previously
+;!!		HWB_CS_START was called previously
 ;!!		AH = xxxx xxxc - c = current bit received
 ;!!		AL = pnxx xxxx - p = previous transmited bit, n = next transmit bit
 ;!!		BL = xxxx xxxp - p = previous received bit
@@ -368,18 +368,17 @@ ENDM
 ;!!		NONE	
 ;!! Total destroy
 ;!!		AX, BX, flags
-HW_TXRX_SHIFT MACRO
+HWB_TXRX_SHIFT MACRO
 	shl		bl,1	; Shift previous received byte left one
 	or		bl,ah	; OR current received bit into BL
 	shl		al,1	; shift sent byte one over
-	;xchg	ah,al	; move transmite byte back to ah for next bit
 	mov		ah,al	; move transmite byte back to ah for next bit
 ENDM
 
 ;!! MACRO
-;!!		HW_TXRX_BIT_SHIFT
+;!!		HWB_TXRX_BIT_SHIFT
 ;!! Input
-;!!		HW_CS_START was called previously
+;!!		HWB_CS_START was called previously
 ;!!		AH = nfxx xxxx - next bit to transmit, future bit to transmit
 ;!!		BL = xxxx xxxp - p = previous received bit 
 ;!!		DX = eth_read_write_bit
@@ -391,23 +390,23 @@ ENDM
 ;!! Uses directly
 ;!!		NONE
 ;!! Calls
-;!!		HW_TXRX_BIT (destroys AX, flags)
-;!!		HW_TXRX_SHIFT (destroys AX, BX, flags)
+;!!		HWB_TXRX_BIT (destroys AX, flags)
+;!!		HWB_TXRX_SHIFT (destroys AX, BX, flags)
 ;!! Dependencies destroy
 ;!!		AX, BX, flags
 ;!! Directly preserves
 ;!!		NONE
 ;!! Total destroy
-;!!		AX, BX, flags
-HW_TXRX_BIT_SHIFT MACRO
-	HW_TXRX_BIT
-	HW_TXRX_SHIFT
+;!!		AX,BX,flags
+HWB_TXRX_BIT_SHIFT MACRO
+	HWB_TXRX_BIT
+	HWB_TXRX_SHIFT
 ENDM
 
 ;!! PROC
-;!!		HW_TXRX_BYTE
+;!!		HWB_TXRX_BYTE
 ;!! Input
-;!!		HW_CS_START was called previously
+;!!		HWB_CS_START was called previously
 ;!!		AH = byte to transmit
 ;!!		DX = eth_read_write_bit
 ;!! Output
@@ -415,29 +414,29 @@ ENDM
 ;!! Uses directly
 ;!!		AX, BX, flags
 ;!! Calls
-;!!		HW_TXRX_BIT_SHIFT (destroys AX, BX, flags)
+;!!		HWB_TXRX_BIT_SHIFT (destroys AX, BX, flags)
 ;!! Dependencies destroy
 ;!!		AX, BX, flags
 ;!! Directly preserves
 ;!!		BX
 ;!! Total destroy
-;!!		AX, flags
-HW_TXRX_BYTE PROC NEAR
+;!!		AX,flags
+HWB_TXRX_BYTE PROC NEAR
 	push	bx
 	xor		bl,bl ; used to build return value
 	; ah = transmit byte
-	HW_TXRX_BIT_SHIFT ; 1 ; Unrolled 8 bit tx/rx/shift
-	HW_TXRX_BIT_SHIFT
-	HW_TXRX_BIT_SHIFT
-	HW_TXRX_BIT_SHIFT ; 4
-	HW_TXRX_BIT_SHIFT ; 5
-	HW_TXRX_BIT_SHIFT
-	HW_TXRX_BIT_SHIFT
-	HW_TXRX_BIT_SHIFT ; 8
+	HWB_TXRX_BIT_SHIFT ; 1 ; Unrolled 8 bit tx/rx/shift
+	HWB_TXRX_BIT_SHIFT
+	HWB_TXRX_BIT_SHIFT
+	HWB_TXRX_BIT_SHIFT ; 4
+	HWB_TXRX_BIT_SHIFT ; 5
+	HWB_TXRX_BIT_SHIFT
+	HWB_TXRX_BIT_SHIFT
+	HWB_TXRX_BIT_SHIFT ; 8
 	mov		al,bl ; set up return
 	pop		bx
 	ret
-HW_TXRX_BYTE ENDP
+HWB_TXRX_BYTE ENDP
 
 ;;;;;;;;;;;;;;;;;
 ; CORE COMMANDS
@@ -452,22 +451,22 @@ HW_TXRX_BYTE ENDP
 ;!! Uses directly
 ;!!		AH
 ;!! Calls
-;!!		HW_CS_START (destroys DX)
-;!!		HW_TXRX_BYTE (destroys AX, flags)
-;!!		HW_CS_END (destroys DX)
+;!!		HWB_CS_START (destroys DX)
+;!!		HWB_TXRX_BYTE (destroys AX, flags)
+;!!		HWB_CS_END (destroys DX)
 ;!! Dependencies destroy
 ;!!		AX, DX, flags
 ;!! Directly preserves
 ;!!		NONE
 ;!! Total destroy
-;!!		AX, DX, flags, card state
+;!!		AX,DX,flags,cardstate
 ;!!	Note
 ;!!		Ensure you wait for CLK READY
 HW_SOFT_RESET PROC NEAR
-	HW_CS_START	; Sets DX
+	HWB_CS_START	; Sets DX
 	or		ah,(SRC_OPCODE SHL 5) OR SRC_ARG ; ah = SRC opcode << 5 | SRC_ARG
-	call	HW_TXRX_BYTE ; ignore return, AL = received byte
-	HW_CS_END		; Sets DX
+	call	NEAR PTR HWB_TXRX_BYTE ; ignore return, AL = received byte
+	HWB_CS_END		; Sets DX
 	ret
 HW_SOFT_RESET ENDP
 
@@ -481,21 +480,21 @@ HW_SOFT_RESET ENDP
 ;!! Uses directly
 ;!!		AH
 ;!! Calls
-;!!		HW_CS_START (destroys DX)
-;!!		HW_TXRX_BYTE (destroys AX, flags)
-;!!		HW_CS_END (destroys DX)
+;!!		HWB_CS_START (destroys DX)
+;!!		HWB_TXRX_BYTE (destroys AX, flags)
+;!!		HWB_CS_END (destroys DX)
 ;!! Dependencies destroy
 ;!!		AX, DX, flags
 ;!! Directly preserves
 ;!!		NONE
 ;!! Total destroy
-;!!		AX, DX, flags
+;!!		AX,DX,flags
 HW_READ_ETH_REGISTER PROC NEAR
-	HW_CS_START	; Sets DX
+	HWB_CS_START	; Sets DX
 	or		ah,(RCR_OPCODE SHL 5) ; ah = RCR opcode << 5 | reg (ah)
-	call	HW_TXRX_BYTE ; Send the opcode+reg byte, al returned is dummy
-	call	HW_TXRX_BYTE ; Send gibberish, Receive byte, al
-	HW_CS_END		; Sets DX
+	call	NEAR PTR HWB_TXRX_BYTE ; Send the opcode+reg byte, al returned is dummy
+	call	NEAR PTR HWB_TXRX_BYTE ; Send gibberish, Receive byte, al
+	HWB_CS_END		; Sets DX
 	ret
 HW_READ_ETH_REGISTER ENDP
 
@@ -510,24 +509,24 @@ HW_READ_ETH_REGISTER ENDP
 ;!! Uses directly
 ;!!		AX
 ;!! Calls
-;!!		HW_CS_START (destroys DX)
-;!!		HW_TXRX_BYTE (destroys AX, flags)
-;!!		HW_CS_END (destroys DX)
+;!!		HWB_CS_START (destroys DX)
+;!!		HWB_TXRX_BYTE (destroys AX, flags)
+;!!		HWB_CS_END (destroys DX)
 ;!! Dependencies destroy
 ;!!		AX, DX, flags
 ;!! Directly preserves
 ;!!		NONE
 ;!! Total destroy
-;!!		AX, DX, flags
+;!!		AX,DX,flags
 HW_WRITE_REGISTER PROC NEAR
-	HW_CS_START	; Sets DX
+	HWB_CS_START	; Sets DX
 	push	ax ; Store AL value
 	or		ah,(WCR_OPCODE SHL 5) ; ah = WCR opcode << 5 | reg (ah)
-	call	HW_TXRX_BYTE ; Send opcode + reg byte, al returned is dummy
+	call	NEAR PTR HWB_TXRX_BYTE ; Send opcode + reg byte, al returned is dummy
 	pop		ax ; value = al
 	mov		ah,al ; move value to AH
-	call	HW_TXRX_BYTE ; Send AH value, al returned is dummy
-	HW_CS_END		; Sets DX
+	call	NEAR PTR HWB_TXRX_BYTE ; Send AH value, al returned is dummy
+	HWB_CS_END		; Sets DX
 	ret
 HW_WRITE_REGISTER ENDP
 
@@ -542,24 +541,24 @@ HW_WRITE_REGISTER ENDP
 ;!! Uses directly
 ;!!		AX
 ;!! Calls
-;!!		HW_CS_START (destroys DX)
-;!!		HW_TXRX_BYTE (destroys AX, flags)
-;!!		HW_CS_END (destroys DX)
+;!!		HWB_CS_START (destroys DX)
+;!!		HWB_TXRX_BYTE (destroys AX, flags)
+;!!		HWB_CS_END (destroys DX)
 ;!! Dependencies destroy
 ;!!		AX, DX, flags
 ;!! Directly preserves
 ;!!		NONE
 ;!! Total destroy
-;!!		AX, DX, flags
+;!!		AX,DX,flags
 HW_BIT_FIELD_SET PROC NEAR
-	HW_CS_START	; Sets DX
+	HWB_CS_START	; Sets DX
 	push	ax ; Store AL value
 	or		ah,(BFS_OPCODE SHL 5) ; ah = BFS opcode << 5 | reg (ah)
-	call	HW_TXRX_BYTE ; Send opcode + reg byte, al returned is dummy
+	call	NEAR PTR HWB_TXRX_BYTE ; Send opcode + reg byte, al returned is dummy
 	pop		ax ; value = al
 	mov		ah,al ; move value to AH
-	call	HW_TXRX_BYTE ; Send AH value, al returned is dummy
-	HW_CS_END		; Sets DX
+	call	NEAR PTR HWB_TXRX_BYTE ; Send AH value, al returned is dummy
+	HWB_CS_END		; Sets DX
 	ret
 HW_BIT_FIELD_SET ENDP
 
@@ -574,24 +573,24 @@ HW_BIT_FIELD_SET ENDP
 ;!! Uses directly
 ;!!		AX
 ;!! Calls
-;!!		HW_CS_START (destroys DX)
-;!!		HW_TXRX_BYTE (destroys AX, flags)
-;!!		HW_CS_END (destroys DX)
+;!!		HWB_CS_START (destroys DX)
+;!!		HWB_TXRX_BYTE (destroys AX, flags)
+;!!		HWB_CS_END (destroys DX)
 ;!! Dependencies destroy
 ;!!		AX, DX, flags
 ;!! Directly preserves
 ;!!		NONE
 ;!! Total destroy
-;!!		AX, DX, flags
+;!!		AX,DX,flags
 HW_BIT_FIELD_CLEAR PROC NEAR
-	HW_CS_START	; Sets DX
+	HWB_CS_START	; Sets DX
 	push	ax ; store AL value
 	or		ah,(BFC_OPCODE SHL 5) ; ah = BFC opcode << 5 | reg (ah)
-	call	HW_TXRX_BYTE  ; Send opcode + reg byte, al returned is dummy
+	call	NEAR PTR HWB_TXRX_BYTE  ; Send opcode + reg byte, al returned is dummy
 	pop		ax ; value = al
 	mov		ah,al ; move value to AH
-	call	HW_TXRX_BYTE ; Send AH value, al returned is dummy
-	HW_CS_END		; Sets DX
+	call	NEAR PTR HWB_TXRX_BYTE ; Send AH value, al returned is dummy
+	HWB_CS_END		; Sets DX
 	ret
 HW_BIT_FIELD_CLEAR ENDP
 
@@ -605,21 +604,21 @@ HW_BIT_FIELD_CLEAR ENDP
 ;!! Uses directly
 ;!!		AX
 ;!! Calls
-;!!		HW_CS_START (destroys DX)
-;!!		HW_TXRX_BYTE (destroys AX, flags)
-;!!		HW_CS_END (destroys DX)
+;!!		HWB_CS_START (destroys DX)
+;!!		HWB_TXRX_BYTE (destroys AX, flags)
+;!!		HWB_CS_END (destroys DX)
 ;!! Dependencies destroy
 ;!!		AX, DX, flags
 ;!! Directly preserves
 ;!!		NONE
 ;!! Total destroy
-;!!		AX, DX, flags
+;!!		AX,DX,flags
 HW_READ_BUFFER_MEMORY_BYTE PROC NEAR
-	HW_CS_START	; Sets DX
+	HWB_CS_START	; Sets DX
 	mov		ah,(RBM_OPCODE SHL 5) OR BUFF_MEM_ARG
-	call	HW_TXRX_BYTE  ; Send opcode + reg byte, al returned is dummy
-	call	HW_TXRX_BYTE ; read next byte into al
-	HW_CS_END		; Sets DX
+	call	NEAR PTR HWB_TXRX_BYTE  ; Send opcode + reg byte, al returned is dummy
+	call	NEAR PTR HWB_TXRX_BYTE ; read next byte into al
+	HWB_CS_END		; Sets DX
 	ret
 HW_READ_BUFFER_MEMORY_BYTE ENDP
 
@@ -634,24 +633,24 @@ HW_READ_BUFFER_MEMORY_BYTE ENDP
 ;!! Uses directly
 ;!!		AX
 ;!! Calls
-;!!		HW_CS_START (destroys DX)
-;!!		HW_TXRX_BYTE (destroys AX, flags)
-;!!		HW_CS_END (destroys DX)
+;!!		HWB_CS_START (destroys DX)
+;!!		HWB_TXRX_BYTE (destroys AX, flags)
+;!!		HWB_CS_END (destroys DX)
 ;!! Dependencies destroy
 ;!!		AX, DX, flags
 ;!! Directly preserves
 ;!!		NONE
 ;!! Total destroy
-;!!		AX, DX, flags
+;!!		AX,DX,flags
 HW_WRITE_BUFFER_MEMORY_BYTE PROC NEAR
-	HW_CS_START	; Sets DX
+	HWB_CS_START	; Sets DX
 	push	ax ; save AX
 	mov		ah,(WBM_OPCODE SHL 5) OR BUFF_MEM_ARG
-	call	HW_TXRX_BYTE ; Send initial opcode
+	call	NEAR PTR HWB_TXRX_BYTE ; Send initial opcode
 	pop		ax ; value = al
 	mov		ah,al ; move value to AH
-	call	HW_TXRX_BYTE ; Send AH value, al returned is dummy
-	HW_CS_END		; Sets DX
+	call	NEAR PTR HWB_TXRX_BYTE ; Send AH value, al returned is dummy
+	HWB_CS_END		; Sets DX
 	ret
 HW_WRITE_BUFFER_MEMORY_BYTE ENDP
 
@@ -665,27 +664,27 @@ HW_WRITE_BUFFER_MEMORY_BYTE ENDP
 ;!! Uses directly
 ;!!		AX, BX
 ;!! Calls
-;!!		HW_CS_START (destroys DX)
-;!!		HW_TXRX_BYTE (destroys AX, flags)
-;!!		HW_CS_END (destroys DX)
+;!!		HWB_CS_START (destroys DX)
+;!!		HWB_TXRX_BYTE (destroys AX, flags)
+;!!		HWB_CS_END (destroys DX)
 ;!! Dependencies destroy
 ;!!		AX, DX, flags
 ;!! Directly preserves
 ;!!		BX
 ;!! Total destroy
-;!!		AX, DX, flags
+;!!		AX,DX,flags
 HW_READ_BUFFER_MEMORY_WORD PROC NEAR
-	HW_CS_START
-	push	bx
+	push	bx	; Preserve BX
+	HWB_CS_START
 	mov		ah,(RBM_OPCODE SHL 5) OR BUFF_MEM_ARG
-	call	HW_TXRX_BYTE ; send initial opcode
-	call	HW_TXRX_BYTE ; read next byte into al
+	call	NEAR PTR HWB_TXRX_BYTE ; send initial opcode
+	call	NEAR PTR HWB_TXRX_BYTE ; read next byte into al
 	mov		bl,al ; save low byte
-	call	HW_TXRX_BYTE ; read next byte into al
+	call	NEAR PTR HWB_TXRX_BYTE ; read next byte into al
 	mov		bh,al ; save high byte
 	mov		ax,bx ; save result
-	pop		bx
-	HW_CS_END
+	HWB_CS_END
+	pop		bx	; Restore BX
 	ret ; return ax
 HW_READ_BUFFER_MEMORY_WORD ENDP
 
@@ -700,28 +699,27 @@ HW_READ_BUFFER_MEMORY_WORD ENDP
 ;!! Uses directly
 ;!!		AX
 ;!! Calls
-;!!		HW_CS_START (destroys DX)
-;!!		HW_TXRX_BYTE (destroys AX, flags)
-;!!		HW_CS_END (destroys DX)
+;!!		HWB_CS_START (destroys DX)
+;!!		HWB_TXRX_BYTE (destroys AX, flags)
+;!!		HWB_CS_END (destroys DX)
 ;!! Dependencies destroy
 ;!!		AX, DX, flags
 ;!! Directly preserves
 ;!!		NONE
 ;!! Total destroy
-;!!		AX, DX, flags
+;!!		AX,DX,flags
 HW_WRITE_BUFFER_MEMORY_WORD PROC NEAR
-	HW_CS_START
-	;push	bx
+	HWB_CS_START
 	push	ax ; save AX
 	mov		ah,(WBM_OPCODE SHL 5) OR BUFF_MEM_ARG
-	call	HW_TXRX_BYTE ; Send initial opcode
+	call	NEAR PTR HWB_TXRX_BYTE ; Send initial opcode
 	pop		ax ; get back AX
 	push	ax ; save for second byte
 	mov		ah,al ; move low byte into AH
-	call	HW_TXRX_BYTE ; send low byte
+	call	NEAR PTR HWB_TXRX_BYTE ; send low byte
 	pop		ax ; ah contains high Byte
-	call	HW_TXRX_BYTE ; send high byte byte
-	HW_CS_END
+	call	NEAR PTR HWB_TXRX_BYTE ; send high byte byte
+	HWB_CS_END
 	ret
 HW_WRITE_BUFFER_MEMORY_WORD ENDP
 
@@ -736,28 +734,32 @@ HW_WRITE_BUFFER_MEMORY_WORD ENDP
 ;!! Output
 ;!!		Fills ES:DI
 ;!! Uses directly
-;!!		ES, DI, AX, CX, flags
+;!!		ES (no effect), DI, AX, CX, flags (stosb, loop)
 ;!! Calls
-;!!		HW_CS_START (destroys DX)
-;!!		HW_TXRX_BYTE (destroys AX, flags)
-;!!		HW_CS_END (destroys DX)
+;!!		HWB_CS_START (destroys DX)
+;!!		HWB_TXRX_BYTE (destroys AX, flags)
+;!!		HWB_CS_END (destroys DX)
 ;!! Dependencies destroy
 ;!!		AX, DX, flags
 ;!! Directly preserves
-;!!		ES
+;!!		CX,DI
 ;!! Total destroy
-;!!		DI, AX, CX, DX, flags
+;!!		AX,DX,flags
 HW_READ_BUFFER_MEMORY PROC NEAR
-	HW_CS_START	; Sets DX
+	push	cx
+	push	di		; Preserve CX, DI
+	HWB_CS_START	; Sets DX
 	mov		ah,(RBM_OPCODE SHL 5) OR BUFF_MEM_ARG
-	call	HW_TXRX_BYTE ; Send initial opcode
+	call	NEAR PTR HWB_TXRX_BYTE ; Send initial opcode
 RBM_LOOP:
 	; get next byte
-	call	HW_TXRX_BYTE ; stored in al
+	call	NEAR PTR HWB_TXRX_BYTE ; stored in al
 	cld
-	stosb	; save byte, inc di
+	stosb	; save byte, al->es:di, inc di
 	loop	RBM_LOOP ; dec CX
-	HW_CS_END		; Sets DX
+	HWB_CS_END		; Sets DX
+	pop		di		; Restore CX,DI
+	pop		cx
 	ret
 HW_READ_BUFFER_MEMORY ENDP
 
@@ -778,29 +780,33 @@ HW_READ_BUFFER_MEMORY ENDP
 ;!! Output
 ;!!		NONE (writes to card buffer memory)
 ;!! Uses directly
-;!!		DS, SI, AX, CX, flags
+;!!		DS (no effect), SI, AX, CX, flags (lodsb/loop)
 ;!! Calls
-;!!		HW_CS_START (destroys DX)
-;!!		HW_TXRX_BYTE (destroys AX, flags)
-;!!		HW_CS_END (destroys DX)
+;!!		HWB_CS_START (destroys DX)
+;!!		HWB_TXRX_BYTE (destroys AX, flags)
+;!!		HWB_CS_END (destroys DX)
 ;!! Dependencies destroy
 ;!!		AX, DX, flags
 ;!! Directly preserves
-;!!		DS
+;!!		CX, SI
 ;!! Total destroy
-;!!		SI, AX, CX, DX, flags
+;!!		AX,DX,flags
 HW_WRITE_BUFFER_MEMORY PROC NEAR
-	HW_CS_START	; Sets DX
+	push	cx
+	push	si		; Preserve CX, SI
+	HWB_CS_START	; Sets DX
 	mov		ah,(WBM_OPCODE SHL 5) OR BUFF_MEM_ARG
-	call	HW_TXRX_BYTE ; Send initial opcode
+	call	NEAR PTR HWB_TXRX_BYTE ; Send initial opcode
 WBM_LOOP:
 	; get next byte
 	cld
-	lodsb	; read byte from ds:[si], inc si
+	lodsb	; read byte from ds:[si] -> al, inc si
 	mov		ah,al ; move over to ah for transmit
-	call	HW_TXRX_BYTE ; stored in al
+	call	NEAR PTR HWB_TXRX_BYTE ; stored in al
 	loop	WBM_LOOP ; dec CX
-	HW_CS_END		; Sets DX
+	HWB_CS_END		; Sets DX
+	pop		si		; Restore CX,SI
+	pop		cx
 	ret
 HW_WRITE_BUFFER_MEMORY ENDP
 
@@ -821,22 +827,22 @@ HW_WRITE_BUFFER_MEMORY ENDP
 ;!! Uses directly
 ;!!		AH
 ;!! Calls
-;!!		HW_CS_START (destroys DX)
-;!!		HW_TXRX_BYTE (destroys AX, flags)
-;!!		HW_CS_END (destroys DX)
+;!!		HWB_CS_START (destroys DX)
+;!!		HWB_TXRX_BYTE (destroys AX, flags)
+;!!		HWB_CS_END (destroys DX)
 ;!! Dependencies destroy
 ;!!		AX, DX, flags
 ;!! Directly preserves
 ;!!		NONE
 ;!! Total destroy
-;!!		AX, DX, flags
+;!!		AX,DX,flags
 HW_READ_MAC_MII_REGISTER PROC NEAR
-	HW_CS_START
+	HWB_CS_START
 	or		ah,(RCR_OPCODE SHL 5) ; ah = rcr_opcode << 5 | reg (ah)
-	call	HW_TXRX_BYTE ; Send the opcode+reg byte, al returned is dummy
-	call	HW_TXRX_BYTE ; send dummy byte, this returned al byte is also a dummy for MAC/MII
-	call	HW_TXRX_BYTE ; send dummy byte, returned al is actual byte
-	HW_CS_END
+	call	NEAR PTR HWB_TXRX_BYTE ; Send the opcode+reg byte, al returned is dummy
+	call	NEAR PTR HWB_TXRX_BYTE ; send dummy byte, this returned al byte is also a dummy for MAC/MII
+	call	NEAR PTR HWB_TXRX_BYTE ; send dummy byte, returned al is actual byte
+	HWB_CS_END
 	ret
 HW_READ_MAC_MII_REGISTER ENDP
 
@@ -859,7 +865,7 @@ HW_READ_MAC_MII_REGISTER ENDP
 ;!! Directly preserves
 ;!!		BX, ETH:BANK
 ;!! Total destroy
-;!!		AX, DX, flags
+;!!		AX,DX,flags
 HW_READ_PHY_REGISTER PROC NEAR
 	; Datasheet 3.3
 	
@@ -869,85 +875,85 @@ HW_READ_PHY_REGISTER PROC NEAR
 	; 4.) Clear MICMD.MIIRD bit (BANK2)
 	; 5.) Read the desired data from MIRDL and MIRDH (BANK2)
 	
-	push	bx ; Preserve BX
-	push	ax ; save ah (input register) while swapping bank
+	push	bx;1 ; Preserve BX
+	push	ax;2 ; save ah (input register) while swapping bank
 	
 	; 0.) Save current bank
 	; Get current bank
-	call	HW_GET_CONTROLLER_BANK
+	call	NEAR PTR HW_GET_CONTROLLER_BANK
 	mov		bh,al ; BH contains original bank
 	
 	; Set BANK2
 	mov		ah,BANK2
-	call	HW_SET_CONTROLLER_BANK
+	call	NEAR PTR HW_SET_CONTROLLER_BANK
 	
 	; Get back AX (ah = input register)
-	pop		ax
+	pop		ax;-2
 	
 	; Save current bank
-	push	bx
+	push	bx;2
 
 	; 1.) Write address of PHY register into MIREGADR_REGISTER (BANK2)
 	mov		al,ah ; set value to PHY register
 	mov		ah,MIREGADR_REGISTER
-	call	HW_WRITE_REGISTER
+	call	NEAR PTR HW_WRITE_REGISTER
 	
 	; 2.) Set MICMD.MIIRD bit MICMD_MIIRD_BIT (BANK2) ; Cannot use bit field set on MAC/MII!
 	;mov		ax,(MICMD_REGISTER SHL 8) OR MICMD_MIIRD_BIT
 	;call	HW_BIT_FIELD_SET
 	; 2a.) Read MICMD (BANK2), MAC/MII
 	mov		ah,MICMD_REGISTER
-	call	HW_READ_MAC_MII_REGISTER
+	call	NEAR PTR HW_READ_MAC_MII_REGISTER
 	; 2b.) Set MICMID_MIIRD_BIT
 	or		al,MICMD_MIIRD_BIT ; Set MICMD_MIIRD_BIT
 	; 2c.) Write MICMD (BANK2)
 	mov		ah,MICMD_REGISTER
-	call	HW_WRITE_REGISTER
+	call	NEAR PTR HW_WRITE_REGISTER
 	
 
 	; 3.) Poll MISTAT.BUSY until clear (BANK3)
 	; Set BANK 3
 	mov		ah,BANK3
-	call	HW_SET_CONTROLLER_BANK
+	call	NEAR PTR HW_SET_CONTROLLER_BANK
 	; Poll MISTAT.BUSY
 HW_READ_PHY_REGISTER_BUSY:
 	mov		ah,MISTAT_REGISTER
-	call	HW_READ_MAC_MII_REGISTER 
+	call	NEAR PTR HW_READ_MAC_MII_REGISTER 
 	test	al,MISTAT_BUSY_BIT
-	jnz		HW_READ_PHY_REGISTER_BUSY
+	jnz		NEAR PTR HW_READ_PHY_REGISTER_BUSY
 
 	; 4.) Clear MICMD.MIIRD bit (BANK2)
 	; Set BANK 2
 	mov		ah,BANK2
-	call	HW_SET_CONTROLLER_BANK
+	call	NEAR PTR HW_SET_CONTROLLER_BANK
 	; 4a.) Clear MICMD.MIIRD (can't use HW_BIT_FIELD_CLEAR)
 	;mov		ah,MICMD_REGISTER
 	;mov		al,MICMD_MIIRD_BIT
 	;call	HW_BIT_FIELD_CLEAR
 	mov		ah,MICMD_REGISTER
-	call	HW_READ_MAC_MII_REGISTER
+	call	NEAR PTR HW_READ_MAC_MII_REGISTER
 	; 4b.) Set MICMD_MIIRD_BIT to 0
 	and		al,NOT MICMD_MIIRD_BIT
 	; 4c.) Write MICMD (BANK2), MAC/MII
 	mov		ah,MICMD_REGISTER
-	call	HW_WRITE_REGISTER
+	call	NEAR PTR HW_WRITE_REGISTER
 	
 	
 	; 5.) Read the desired data from MIRDL and MIRDH (BANK2)
 	mov		ah,MIRDL_REGISTER
-	call	HW_READ_MAC_MII_REGISTER
+	call	NEAR PTR HW_READ_MAC_MII_REGISTER
 	mov		bl,al ; store in bl, BX contains value
 	mov		ah,MIRDH_REGISTER
-	call	HW_READ_MAC_MII_REGISTER
+	call	NEAR PTR HW_READ_MAC_MII_REGISTER
 	mov		bh,al ; store in bh
 		
 	; 6.) Restore current bank
-	pop		ax ; Get back current bank
-	call	HW_SET_CONTROLLER_BANK
+	pop		ax;-2 ; Get back current bank
+	call	NEAR PTR HW_SET_CONTROLLER_BANK
 	
 	mov		ax,bx ; Set AX to return value
 
-	pop		bx ; Restore BX
+	pop		bx;-1 ; Restore BX
 	ret
 HW_READ_PHY_REGISTER ENDP
 
@@ -969,9 +975,9 @@ HW_READ_PHY_REGISTER ENDP
 ;!! Dependencies destroy
 ;!!		AX, DX, flags, ETH:BANK
 ;!! Directly preserves
-;!!		ETH:BANK
+;!!		BX, ETH:BANK
 ;!! Total destroy
-;!!		AX, BX, DX, flags
+;!!		AX,DX,flags
 HW_WRITE_PHY_REGISTER PROC NEAR ; Compound operation
 	; Datasheet 3.3
 	
@@ -979,54 +985,57 @@ HW_WRITE_PHY_REGISTER PROC NEAR ; Compound operation
 	;2.) Write lower byte to MIWRL_REGISTER (BANK2)
 	;3.) Write upper byte to MIWRH (BANK2)
 	;4.) Poll MISTAT.BUSY (BANK3) 
+	push	bx ; Save BX
 
-	push	bx ; preserve value
-	push	ax ; preserve PHY register
+
+	push	bx;1 ; preserve value
+	push	ax;2 ; preserve PHY register
 
 	; Get controller bank
-	call	HW_GET_CONTROLLER_BANK
+	call	NEAR PTR HW_GET_CONTROLLER_BANK
 	mov		bh,al ; BH = current bank
 	
 	; Set BANK2
 	mov		ah,BANK2
-	call	HW_SET_CONTROLLER_BANK
+	call	NEAR PTR HW_SET_CONTROLLER_BANK
 	
 	;1.) Write address of PHY Register to MIREGADR (BANK2)
-	pop		ax 	; Restore PHY register (AH)
+	pop		ax;-2 	; Restore PHY register (AH)
 	mov		al,ah ; set AL to PHY register
 	mov		ah,MIREGADR_REGISTER
-	call	HW_WRITE_REGISTER
+	call	NEAR PTR HW_WRITE_REGISTER
 
 	;2.) Write lower byte to MIWRL_REGISTER (BANK2)
-	pop		ax ; Restore Value (old BX)
-	push	bx ; Preserve previous bank
-	push	ax ; Preserve Value (high byte)
+	pop		ax;-1 ; Restore Value (old BX)
+	push	bx;1 ; Preserve previous bank
+	push	ax;2 ; Preserve Value (high byte)
 	mov		ah,MIWRL_REGISTER ; al holds Value (low byte)
-	call	HW_WRITE_REGISTER
+	call	NEAR PTR HW_WRITE_REGISTER
 	
 	;3.) Write upper byte to MIWRH_REGISTER (BANK2)
-	pop		ax ; Restore Value (high byte)
+	pop		ax;-2 ; Restore Value (high byte)
 	mov		al,ah ; move high byte to al
 	mov		ah,MIWRH_REGISTER
-	call	HW_WRITE_REGISTER
+	call	NEAR PTR HW_WRITE_REGISTER
 	
 	;4.) Poll MISTAT.BUSY (BANK3) 
 	; Set Bank 3
 	mov		ah,BANK3
-	call	HW_SET_CONTROLLER_BANK
+	call	NEAR PTR HW_SET_CONTROLLER_BANK
 	
 	; poll
 	; Poll MISTAT.BUSY
 HW_WRITE_PHY_REGISTER_BUSY:
 	mov		ah,MISTAT_REGISTER
-	call	HW_READ_MAC_MII_REGISTER 
+	call	NEAR PTR HW_READ_MAC_MII_REGISTER 
 	test	al,MISTAT_BUSY_BIT
-	jnz		HW_WRITE_PHY_REGISTER_BUSY
+	jnz		NEAR PTR HW_WRITE_PHY_REGISTER_BUSY
 
 	; Restore Bank
-	pop		ax ; Restore AH = original BANK
-	call	HW_SET_CONTROLLER_BANK
+	pop		ax;-1 ; Restore AH = original BANK
+	call	NEAR PTR HW_SET_CONTROLLER_BANK
 
+	pop		bx ; Restore BX
 	ret
 HW_WRITE_PHY_REGISTER ENDP
 
@@ -1045,17 +1054,19 @@ HW_WRITE_PHY_REGISTER ENDP
 ;!! Dependencies destroy
 ;!!		AX, DX, flags
 ;!! Directly preserves
-;!!		NONE
+;!!		BX
 ;!! Total destroy
-;!!		AX, BX, DX, flags
+;!!		AX,DX,flags
 HW_WRITE_REGISTER_LOW_HIGH PROC NEAR
+	push	bx ; Preserve BX
 	xchg	al,bh	; AX = REG_HIGH, VAL_HIGH
 					; BX = REG_LOW, VAL_LOW
 	push	ax ; Save high HW_WRITE_REGISTER+VAL
 	mov		ax,bx
-	call	HW_WRITE_REGISTER ; Write REG_LOW, VAL_LOW
+	call	NEAR PTR HW_WRITE_REGISTER ; Write REG_LOW, VAL_LOW
 	pop		ax ; Restore high HW_WRITE_REGISTER+VAL
-	call	HW_WRITE_REGISTER ; Write REG_HIGH, VAL_HIGH
+	call	NEAR PTR HW_WRITE_REGISTER ; Write REG_HIGH, VAL_HIGH
+	pop		bx ; Restore BX
 	ret
 HW_WRITE_REGISTER_LOW_HIGH ENDP
 
@@ -1075,22 +1086,22 @@ HW_WRITE_REGISTER_LOW_HIGH ENDP
 ;!! Directly preserves
 ;!!		BX
 ;!! Total destroy
-;!!		AX, DX, flags
+;!!		AX,DX,flags
 HW_READ_ETH_REGISTER_LOW_HIGH PROC NEAR
 	push	bx
 	push	ax ; save low register
-	call	HW_READ_ETH_REGISTER ; returns AL = VAL_HIGH
+	call	NEAR PTR HW_READ_ETH_REGISTER ; returns AL = VAL_HIGH
 	mov		bh,al ; save high value
 	pop		ax ; get low register
 	mov		ah,al ; set low register
-	call	HW_READ_ETH_REGISTER ; returns AL = VAL_LOW
+	call	NEAR PTR HW_READ_ETH_REGISTER ; returns AL = VAL_LOW
 	mov		ah,bh ; get high value back
 	pop		bx
 	ret
 HW_READ_ETH_REGISTER_LOW_HIGH ENDP
 
 ;!! PROC
-;!!		TXRX_CLEAR_MEMORY
+;!!		HW_CLEAR_MEMORY
 ;!! Input
 ;!!		NONE
 ;!! Output
@@ -1105,15 +1116,16 @@ HW_READ_ETH_REGISTER_LOW_HIGH ENDP
 ;!! Directly preserves
 ;!!		CX
 ;!! Total destroy
-;!!		AX, CX, DX, flags, ETH:BANK
+;!!		AX,DX,flags
+;!!		ETH:BANK
 HW_CLEAR_MEMORY PROC NEAR
 	push	cx
 	mov		cx,RX_ADDRESS_END ; End of memory
 	xor		ax,ax ; Beginning of memory
-	call	HW_SET_EWRPT ; Set write pointer to beginning of memory
+	call	NEAR PTR HW_SET_EWRPT ; Set write pointer to beginning of memory
 HW_CLEAR_MEMORY_LOOP:
 	xor		al,al ; Write 0 to every byte
-	call	HW_WRITE_BUFFER_MEMORY_BYTE
+	call	NEAR PTR HW_WRITE_BUFFER_MEMORY_BYTE
 	loop	HW_CLEAR_MEMORY_LOOP
 	pop		cx
 	ret
@@ -1141,18 +1153,18 @@ HW_CLEAR_MEMORY ENDP
 ;!! Directly preserves
 ;!!		BX
 ;!! Total destroy
-;!!		AX, DX, flags
+;!!		AX,DX,flags
 ;!!		ETH: BANK
 HW_SET_CONTROLLER_BANK PROC NEAR
 	push	bx ; will use BX as temp
 	push	ax ; Save ah (bank)
 	mov		ah,ECON1_REGISTER ; Works from all banks
-	call	HW_READ_ETH_REGISTER ; returns AL = ECON1 value
+	call	NEAR PTR HW_READ_ETH_REGISTER ; returns AL = ECON1 value
 	and		al,NOT BANK_MASK ; force current bank bits to 0
 	pop		bx ; Get back old AX (Desired Bank = bh now)
 	or		al,bh ; AL now contains old ECON1 but with new bank
 	mov		ah,ECON1_REGISTER
-	call	HW_WRITE_REGISTER
+	call	NEAR PTR HW_WRITE_REGISTER
 	pop		bx ; Restore BX
 	ret
 HW_SET_CONTROLLER_BANK ENDP
@@ -1173,10 +1185,10 @@ HW_SET_CONTROLLER_BANK ENDP
 ;!! Directly preserves
 ;!!		NONE
 ;!! Total destroy
-;!!		AX, DX, flags
+;!!		AX,DX,flags
 HW_GET_CONTROLLER_BANK PROC NEAR
 	mov		ah,ECON1_REGISTER
-	call	HW_READ_ETH_REGISTER ; Returns AL = ECON1
+	call	NEAR PTR HW_READ_ETH_REGISTER ; Returns AL = ECON1
 	and		al,BANK_MASK ; Select BANK bits
 	ret
 HW_GET_CONTROLLER_BANK ENDP
@@ -1191,22 +1203,25 @@ HW_GET_CONTROLLER_BANK ENDP
 ;!!		AX, BX, flags
 ;!! Calls
 ;!!		HW_SET_CONTROLLER_BANK (destroys AX, DX, flags, ETH:BANK)
-;!!		HW_WRITE_REGISTER_LOW_HIGH (destroys AX, BX, DX, flags)
+;!!		HW_WRITE_REGISTER_LOW_HIGH (destroys AX, DX, flags)
 ;!! Dependencies destroy
-;!!		AX, BX, DX, flags, ETH: BANK
+;!!		AX, DX, flags, ETH: BANK
 ;!! Directly preserves
 ;!!		BX
 ;!! Total destroy
-;!!		AX, DX, flags, ETH:BANK	
+;!!		AX,DX,flags
+;!!		ETH:BANK	
 HW_SET_ERDPT PROC NEAR
-	push	bx
+	push	bx ; Preserve BX
+	
 	push	ax
 	mov		ah,BANK0
-	call	HW_SET_CONTROLLER_BANK
+	call	NEAR PTR HW_SET_CONTROLLER_BANK
 	pop		bx ; get old AX value
 	mov		ax,(ERDPTH_REGISTER SHL 8) OR ERDPTL_REGISTER
-	call	HW_WRITE_REGISTER_LOW_HIGH
-	pop		bx
+	call	NEAR PTR HW_WRITE_REGISTER_LOW_HIGH
+	
+	pop		bx ; Restore BX
 	ret
 HW_SET_ERDPT ENDP
 
@@ -1220,22 +1235,25 @@ HW_SET_ERDPT ENDP
 ;!!		AX, BX, flags
 ;!! Calls
 ;!!		HW_SET_CONTROLLER_BANK (destroys AX, DX, flags, ETH:BANK)
-;!!		HW_WRITE_REGISTER_LOW_HIGH (destroys AX, BX, DX, flags)
+;!!		HW_WRITE_REGISTER_LOW_HIGH (destroys AX, DX, flags)
 ;!! Dependencies destroy
 ;!!		AX, BX, DX, flags, ETH: BANK
 ;!! Directly preserves
 ;!!		BX
 ;!! Total destroy
-;!!		AX, DX, flags, ETH:BANK	
+;!!		AX,DX,flags
+;!!		ETH:BANK	
 HW_SET_EWRPT PROC NEAR
-	push	bx
+	push	bx ; Preserve BX
+	
 	push	ax
 	mov		ah,BANK0
-	call	HW_SET_CONTROLLER_BANK
+	call	NEAR PTR HW_SET_CONTROLLER_BANK
 	pop		bx ; get old AX value
 	mov		ax,(EWRPTH_REGISTER SHL 8) OR EWRPTL_REGISTER
-	call	HW_WRITE_REGISTER_LOW_HIGH
-	pop		bx
+	call	NEAR PTR HW_WRITE_REGISTER_LOW_HIGH
+	
+	pop		bx ; Restore BX
 	ret
 HW_SET_EWRPT ENDP
 
@@ -1249,36 +1267,45 @@ HW_SET_EWRPT ENDP
 ;!!		AX, BX, flags
 ;!! Calls
 ;!!		HW_SET_CONTROLLER_BANK (destroys AX, DX, flags, ETH:BANK)
-;!!		HW_WRITE_REGISTER_LOW_HIGH (destroys AX, BX, DX, flags)
+;!!		HW_WRITE_REGISTER_LOW_HIGH (destroys AX, DX, flags)
+;!!		HW_BIT_FIELD_SET (AX,DX,flags)
 ;!! Dependencies destroy
 ;!!		AX, BX, DX, flags, ETH: BANK
 ;!! Directly preserves
 ;!!		BX
 ;!! Total destroy
-;!!		AX, DX, flags, ETH:BANK	
+;!!		AX,DX,flags
+;!!		ETH:BANK	
 HW_SEND PROC NEAR
+	push	bx ; Preserve BX
+
+
 	mov		ah,BANK0
-	call	HW_SET_CONTROLLER_BANK
+	call	NEAR PTR HW_SET_CONTROLLER_BANK
 	
 	;; Set ETXST (BANK0) to beginning of transmit buffer
-	push	bx
 	mov		ax,(ETXSTH_REGISTER SHL 8) OR ETXSTL_REGISTER
 	mov		bx,TX_ADDRESS_START
-	call	HW_WRITE_REGISTER_LOW_HIGH
+	call	NEAR PTR HW_WRITE_REGISTER_LOW_HIGH
+	; Initial pointer is at the control byte
 	
 	;; Set ETXND (BANK0) to end of transmit buffer
 	mov		ax,(ETXNDH_REGISTER SHL 8) OR ETXNDL_REGISTER
 	mov		bx,TX_ADDRESS_START
-	add		bx,cx
+	add		bx,cx ; Setting the end byte to START + LENGTH = TOTAL + 1 = includes control byte
+	
+	;; This isn't needed because the CRC bytes aren't coutned
+	;; and START + SIZE = START (control_byte) END (length + 1)
 	;add		bx,1 ; Add Control Byte
 	;add		bx,5 ; (Packet Size (CX) + 1 (control byte) + 4 (CRC bytes)
-	call	HW_WRITE_REGISTER_LOW_HIGH
-	pop		bx
+	
+	call	NEAR PTR HW_WRITE_REGISTER_LOW_HIGH
 	
 	;; Set ECON1_TXRTS_BIT to initiate transmit
 	mov		ax,(ECON1_REGISTER SHL 8) OR ECON1_TXRTS_BIT
-	call	HW_BIT_FIELD_SET	
+	call	NEAR PTR HW_BIT_FIELD_SET	
 
+	pop		bx ; Restore BX
 	ret
 HW_SEND ENDP
 
@@ -1297,12 +1324,12 @@ HW_SEND ENDP
 ;!! Directly preserves
 ;!!		NONE
 ;!! Total destroy
-;!!		AX, DX, flags	
+;!!		AX,DX,flags	
 HW_WAIT_SEND_COMPLETE PROC NEAR
 	mov		ah,ECON1_REGISTER ; (all banks)
-	call	HW_READ_ETH_REGISTER ; returns AL = ECON1 value
+	call	NEAR PTR HW_READ_ETH_REGISTER ; returns AL = ECON1 value
 	test	al,ECON1_TXRTS_BIT ; 1 if attempting to transmit
-	jnz		HW_WAIT_SEND_COMPLETE ; If not zero, loop until transmit complete
+	jnz		NEAR PTR HW_WAIT_SEND_COMPLETE ; If not zero, loop until transmit complete
 	ret
 HW_WAIT_SEND_COMPLETE ENDP
 
@@ -1327,7 +1354,7 @@ HW_WAIT_SEND_COMPLETE ENDP
 ;!!		AX, BX, flags
 ;!! Calls
 ;!!		HW_SET_CONTROLLER_BANK (destroys AX, DX, flags, ETH:BANK)
-;!!		HW_WRITE_REGISTER_LOW_HIGH (destroys AX, BX, DX, flags)
+;!!		HW_WRITE_REGISTER_LOW_HIGH (destroys AX, DX, flags)
 ;!! Dependencies destroy
 ;!!		AX, BX, DX, flags, ETH:BANK
 ;!! Directly preserves
@@ -1340,46 +1367,46 @@ HW_SETUP_CONTROLLER_BUFFERS PROC NEAR
 	;	ETXSTH_REGISTER,ETXSTL_REGISTER  (BANK0)
 	;	TX_ADDRESS_START (1900h)
 	mov		ah,BANK0
-	call	HW_SET_CONTROLLER_BANK
+	call	NEAR PTR HW_SET_CONTROLLER_BANK
 	mov		ax,(ETXSTH_REGISTER SHL 8) OR ETXSTL_REGISTER
 	mov		bx,TX_ADDRESS_START
-	call	HW_WRITE_REGISTER_LOW_HIGH
+	call	NEAR PTR HW_WRITE_REGISTER_LOW_HIGH
 
 	;; Initialize Eth TX End Memory Pointers to TX_ADDRESS_END	
 	;	ETXNDH_REGISTER,ETXNDL_REGISTER (BANK0)
 	;	TX_ADDRESS_END (1FFFh)
 	mov		ah,BANK0
-	call	HW_SET_CONTROLLER_BANK
+	call	NEAR PTR HW_SET_CONTROLLER_BANK
 	mov		ax,(ETXNDH_REGISTER SHL 8) OR ETXNDL_REGISTER
 	mov		bx,TX_ADDRESS_END
-	call	HW_WRITE_REGISTER_LOW_HIGH
+	call	NEAR PTR HW_WRITE_REGISTER_LOW_HIGH
 	
 	;; Initialize Eth RX Start Memory Pointers to RX_ADDRESS_START	
 	;	ERXNDH_REGISTER,ERXNDL_REGISTER (BANK0)
 	;	RX_ADDRESS_START (0000h)
 	mov		ah,BANK0
-	call	HW_SET_CONTROLLER_BANK
+	call	NEAR PTR HW_SET_CONTROLLER_BANK
 	mov		ax,(ERXSTH_REGISTER SHL 8) OR ERXSTL_REGISTER
 	mov		bx,RX_ADDRESS_START
-	call	HW_WRITE_REGISTER_LOW_HIGH
+	call	NEAR PTR HW_WRITE_REGISTER_LOW_HIGH
 	
 	;; Initialize Eth RX END Memory Pointers to RX_ADDRESS_END	
 	;	ERXNDH_REGISTER,ERXNDL_REGISTER (BANK0)
 	;	RX_ADDRESS_START (18FFh)
 	mov		ah,BANK0
-	call	HW_SET_CONTROLLER_BANK
+	call	NEAR PTR HW_SET_CONTROLLER_BANK
 	mov		ax,(ERXNDH_REGISTER SHL 8) OR ERXNDL_REGISTER
 	mov		bx,RX_ADDRESS_END
-	call	HW_WRITE_REGISTER_LOW_HIGH
+	call	NEAR PTR HW_WRITE_REGISTER_LOW_HIGH
 
 	;; Initialize Eth RX Read Pointer to beginning of read memory
 	;	ERXRDPTH_REGISTER, ERXRDPTL_REGISTER (BANK 0)
 	;	RX_ADDRESS_START (0000h)
 	mov		ah,BANK0
-	call	HW_SET_CONTROLLER_BANK
+	call	NEAR PTR HW_SET_CONTROLLER_BANK
 	mov		ax,(ERXRDPTH_REGISTER SHL 8) OR ERXRDPTL_REGISTER
 	mov		bx,RX_ADDRESS_START
-	call	HW_WRITE_REGISTER_LOW_HIGH
+	call	NEAR PTR HW_WRITE_REGISTER_LOW_HIGH
 	
 	pop		bx
 	ret
@@ -1415,9 +1442,9 @@ HW_SETUP_CONTROLLER_FILTERS PROC NEAR
 	; - This is to cover broadcast ARP but reject all other broadcast
 	; 1 0 1 1 0 0 0 0 	; (B0h)
 	mov		ah,BANK1
-	call	HW_SET_CONTROLLER_BANK
+	call	NEAR PTR HW_SET_CONTROLLER_BANK
 	mov		ax,(ERXFCON_REGISTER SHL 8) OR (ERXFCON_UCEN_BIT OR ERXFCON_CRCEN_BIT OR ERXFCON_PMEN_BIT)
-	call	HW_WRITE_REGISTER
+	call	NEAR PTR HW_WRITE_REGISTER
 	
 	;; Initialize packet filters
 	;TODO - this is from example, figure out what it means
@@ -1430,15 +1457,15 @@ HW_SETUP_CONTROLLER_FILTERS PROC NEAR
 	
 	;; Patter Match Mask Byte 0
 	mov		ah,BANK1
-	call	HW_SET_CONTROLLER_BANK
+	call	NEAR PTR HW_SET_CONTROLLER_BANK
 	mov		ax,(EPMM0_REGISTER SHL 8) OR 3Fh
-	call	HW_WRITE_REGISTER
+	call	NEAR PTR HW_WRITE_REGISTER
 
 	;; Patter Match Mask Byte 1
 	mov		ah,BANK1
-	call	HW_SET_CONTROLLER_BANK
+	call	NEAR PTR HW_SET_CONTROLLER_BANK
 	mov		ax,(EPMM1_REGISTER SHL 8) OR 30h
-	call	HW_WRITE_REGISTER
+	call	NEAR PTR HW_WRITE_REGISTER
 
 	;; Pattern match checksum
 	;mov		ax,(EPMCSH_REGISTER SHL 8) OR 0F7h
@@ -1488,7 +1515,7 @@ HW_SETUP_CONTROLLER_MODE PROC NEAR
 	;	ECON2_REGISTER (Any Bank) 
 	; (80h)
 	mov		ax,(ECON2_REGISTER SHL 8) OR ECON2_AUTOINC_BIT
-	call	HW_BIT_FIELD_SET
+	call	NEAR PTR HW_BIT_FIELD_SET
 HW_SETUP_CONTROLLER_MODE_EXIT:
 	ret
 HW_SETUP_CONTROLLER_MODE ENDP
@@ -1514,7 +1541,7 @@ HW_SETUP_CONTROLLER_MODE ENDP
 HW_SETUP_CONTROLLER_MAC PROC NEAR
 	;0.) Set BANK to 2 for next ops
 	mov		ah,BANK2
-	call	HW_SET_CONTROLLER_BANK
+	call	NEAR PTR HW_SET_CONTROLLER_BANK
 		
 	;1. Set MACON1_REGISTER (BANK2) to enable MAC:
 	; 0000 0 0 0 1 (01h)
@@ -1523,12 +1550,13 @@ HW_SETUP_CONTROLLER_MAC PROC NEAR
 	;	half-duplex mode
 	; 
 	mov		ax,(MACON1_REGISTER SHL 8) OR MACON1_MARXEN_BIT
-	call	HW_BIT_FIELD_SET
+	call	NEAR PTR HW_BIT_FIELD_SET
 	MACON1_UNSET_BITS1 EQU MACON1_TXPAUS_BIT OR MACON1_RXPAUS_BIT
-	MACON1_UNSET_BITS2 EQU MACON1_PASSALL_BIT
+;	MACON1_UNSET_BITS2 EQU MACON1_PASSALL_BIT
+	MACON1_UNSET_BITS2 EQU 0 ; 20251012, disabling the PASSALL
 	MACON1_UNSET_BITS EQU MACON1_UNSET_BITS1 OR MACON1_UNSET_BITS2
 	mov		ax,(MACON1_REGISTER SHL 8) OR MACON1_UNSET_BITS
-	call	HW_BIT_FIELD_CLEAR
+	call	NEAR PTR HW_BIT_FIELD_CLEAR
 
 	;2. Set MACON3_REGISTER (Bank 2)
 	; (MACON3_PADCFG2_SET|MACON3_PADCFG1_SET|MACON3_PADCFG0_SET|MACON3_TXCRCEN_SET
@@ -1538,13 +1566,12 @@ HW_SETUP_CONTROLLER_MAC PROC NEAR
 	
 	;MACON3_SET_BITS1 EQU MACON3_PADCFG2_BIT OR MACON3_PADCFG1_BIT OR MACON3_PADCFG0_BIT
 		; For some reason padding to 64 bits + CRC doesn't seem to work?
-	MACON3_SET_BITS1 EQU MACON3_PADCFG0_BIT ; 20250323 - trying pad to 60 bytes + valid crc
-
-	
+	MACON3_SET_BITS1 EQU MACON3_PADCFG0_BIT; 20250323 - trying pad to 60 bytes + valid crc
 	MACON3_SET_BITS2 EQU MACON3_TXCRCEN_BIT
+	
 	MACON3_SET_BITS EQU MACON3_SET_BITS1 OR MACON3_SET_BITS2
 	mov		ax,(MACON3_REGISTER SHL 8) OR MACON3_SET_BITS
-	call	HW_WRITE_REGISTER
+	call	NEAR PTR HW_WRITE_REGISTER
 	;call	HW_BIT_FIELD_SET
 	;MACON3_UNSET_BITS1 EQU MACON3_PHDREN_BIT OR MACON3_HFRMEN_BIT 
 	;MACON3_UNSET_BITS2 EQU MACON3_FRMLNEN_BIT OR MACON3_FULDPX_BIT
@@ -1555,27 +1582,27 @@ HW_SETUP_CONTROLLER_MAC PROC NEAR
 	;3.) Set MACON4_REGISTER (BANK2) (MACON4_DEFER_SET)
 	; 0 1 0 0  0 0 0 0 (40h)
 	mov		ax,(MACON4_REGISTER SHL 8) OR MACON4_DEFER_BIT
-	call	HW_BIT_FIELD_SET
+	call	NEAR PTR HW_BIT_FIELD_SET
 	MACON4_UNSET_BITS EQU MACON4_BPEN_BIT OR MACON4_NOBKOFF_BIT
 	mov		ax,(MACON4_REGISTER SHL 8) OR MACON4_UNSET_BITS
-	call	HW_BIT_FIELD_CLEAR
+	call	NEAR PTR HW_BIT_FIELD_CLEAR
 	
 	; 4.) Set MAMXFLL_REGISTER & MAMXFLH_REGISTER (BANK2)
 	; (05EEh)
 	mov		ax,(MAMXFLH_REGISTER SHL 8) OR MAMXFLL_REGISTER
 	mov		bx,MAX_FRAME_LENGTH
-	call	HW_WRITE_REGISTER_LOW_HIGH
+	call	NEAR PTR HW_WRITE_REGISTER_LOW_HIGH
 	
 	;5.) Set MABBIPG_REGISTER (BANK2) Back-to-Back inter-packet gap
 	; (12h) - half-duplex gap
 	mov		ax,(MABBIPG_REGISTER SHL 8) OR B2BINTERPACKETGAP
-	call	HW_WRITE_REGISTER
+	call	NEAR PTR HW_WRITE_REGISTER
 
 	;6/7.) Configure Non-Back-to-Back Inter-Packet Gap low byte + high byte
 	; (0C12h)
 	mov		ax,(MAIPGH_REGISTER SHL 8) OR MAIPGL_REGISTER
 	mov		bx,NB2BINTERPACKETGAP
-	call	HW_WRITE_REGISTER_LOW_HIGH
+	call	NEAR PTR HW_WRITE_REGISTER_LOW_HIGH
 	
 		;- Will use default reset values for now
 ;  Serial.println("8.) Program Retransmission and Collision window registers (MACLCON1 & 2)");
@@ -1586,31 +1613,31 @@ HW_SETUP_CONTROLLER_MAC PROC NEAR
 	; MAC Address 0-5
 	; 00 03 01 04 01 05
 	mov		ah,BANK3
-	call	HW_SET_CONTROLLER_BANK 
+	call	NEAR PTR HW_SET_CONTROLLER_BANK 
 	
 	mov		ah,MAADR1_REGISTER
 	mov		al,MAC_ADDRESS_TABLE[0] ;; PROVIDED BY PKT_DRIVER!!
-	call	HW_WRITE_REGISTER
+	call	NEAR PTR HW_WRITE_REGISTER
 
 	mov		ah,MAADR2_REGISTER
 	mov		al,MAC_ADDRESS_TABLE[1]
-	call	HW_WRITE_REGISTER
+	call	NEAR PTR HW_WRITE_REGISTER
 	
 	mov		ah,MAADR3_REGISTER
 	mov		al,MAC_ADDRESS_TABLE[2]
-	call	HW_WRITE_REGISTER
+	call	NEAR PTR HW_WRITE_REGISTER
 
 	mov		ah,MAADR4_REGISTER
 	mov		al,MAC_ADDRESS_TABLE[3]
-	call	HW_WRITE_REGISTER
+	call	NEAR PTR HW_WRITE_REGISTER
 
 	mov		ah,MAADR5_REGISTER
 	mov		al,MAC_ADDRESS_TABLE[4]
-	call	HW_WRITE_REGISTER
+	call	NEAR PTR HW_WRITE_REGISTER
 	
 	mov		ah,MAADR6_REGISTER
 	mov		al,MAC_ADDRESS_TABLE[5]
-	call	HW_WRITE_REGISTER
+	call	NEAR PTR HW_WRITE_REGISTER
 	ret
 HW_SETUP_CONTROLLER_MAC ENDP
 
@@ -1619,14 +1646,14 @@ HW_SETUP_CONTROLLER_PHY PROC NEAR
 	; 0.) Confirm PHY is not in reset
 HW_SETUP_CONTROLLER_PHY_LOOP:
 	mov		ah,PHCON1_REGISTER
-	call	HW_READ_PHY_REGISTER ; returns AX
+	call	NEAR PTR HW_READ_PHY_REGISTER ; returns AX
 	test	ax,PHCON1_PRST_BIT ; 0 when done
 	jnz		HW_SETUP_CONTROLLER_PHY_LOOP
 
 	; 1.) Get current PHCON1_REGISTER (PHY) value
 	; (0000h)
 	mov		ah,PHCON1_REGISTER
-	call	HW_READ_PHY_REGISTER ; returns AX
+	call	NEAR PTR HW_READ_PHY_REGISTER ; returns AX
 	
 	; 2.) Set PHCON1_PDPXMD_BIT to 0 (Half-Duplex)
 	and		ax,NOT PHCON1_PDPXMD_BIT
@@ -1634,12 +1661,12 @@ HW_SETUP_CONTROLLER_PHY_LOOP:
 	; 3.) Write PHY value
 	mov		bx,ax ; set value to BX
 	mov		ah,PHCON1_REGISTER
-	call	HW_WRITE_PHY_REGISTER
+	call	NEAR PTR HW_WRITE_PHY_REGISTER
 	
 	; 4.) Get current PHCON2_REGISTER (PHY) value
 	; (0100h)
 	mov		ah,PHCON2_REGISTER
-	call	HW_READ_PHY_REGISTER ; returns AX
+	call	NEAR PTR HW_READ_PHY_REGISTER ; returns AX
 
 	; 5.) Set PHCON2_HDLDIS_BIT to 1 to disable automatic loopback
 	or		ax,PHCON2_HDLDIS_BIT
@@ -1647,7 +1674,7 @@ HW_SETUP_CONTROLLER_PHY_LOOP:
 	; 6.) Write PHY value
 	mov		bx,ax ; set value to BX
 	mov		ah,PHCON2_REGISTER
-	call	HW_WRITE_PHY_REGISTER
+	call	NEAR PTR HW_WRITE_PHY_REGISTER
 	
 	pop		bx
 	ret
@@ -1661,57 +1688,53 @@ HW_SETUP_CONTROLLER_PHY ENDP
 ;!!		DS:SI = PCjr Memory containing packet
 ;!!		CX = packet_size
 ;!! Output
-;!!		NONE
+;!!		Carry Flag Set/Clear
 ;!! Uses directly
 ;!!		AX 
 ;!! Calls
 ;!!		HW_WAIT_SEND_COMPLETE (destroys AX, DX, flags)
 ;!!		HW_SET_EWRPT (destroys AX, DX, flags, ETH:BANK)
-;!!		WRITE_BUFFER_MEMORY_BYTE (destroys AX, DX, flags)
-;!!		WRITE_BUFFER_MEMORY (destroys SI, AX, CX, DX, flags)
-;!!		HW_SET_ETXST_ND
+;!!		HW_WRITE_BUFFER_MEMORY_BYTE (destroys AX, DX, flags)
+;!!		HW_WRITE_BUFFER_MEMORY (destroys AX, DX, flags)
+;!!		HW_SEND (destroys AX, DX, flags)
 ;!! Dependencies destroy
 ;!!		AX, DX, flags, ETH:BANK
 ;!! Directly preserves
-;!!		SI, CX
+;!!		None
 ;!! Total destroy
-;!!		AX, DX, flags
+;!!		AX,DX,flags
 HAL_SEND_PKT PROC NEAR
 	;; Check if transmission is curently occuring
-	mov		ah,ECON1_REGISTER
-	call	HW_READ_ETH_REGISTER ; al = result
-	and		al,ECON1_TXRTS_BIT
-	;jz		HAL_SEND_PKT_CONT ; No transmission currently occuring
-	jnz		HAL_SEND_PKT_FAIL ; Transmission is currently occuring, bail out
-	
-;	;; Otherwise Return BAD
-;	stc
-;	ret
-HAL_SEND_PKT_CONT:
+;	mov		ah,ECON1_REGISTER
+;	call	HW_READ_ETH_REGISTER ; al = result
+;	and		al,ECON1_TXRTS_BIT
+;	jnz		HAL_SEND_PKT_FAIL ; Transmission is currently occuring, bail out
+
+	;; Just in case somehow it is still waiting to transmit
+	;; Shouldn't be possible because we don't allow leaving until transmission complete
+	call	NEAR PTR HW_WAIT_SEND_COMPLETE ; will loop until free
+
+;HAL_SEND_PKT_CONT:
 	;; 1.) Set Write Pointer
 	mov		ax,TX_ADDRESS_START
-	call	HW_SET_EWRPT
+	call	NEAR PTR HW_SET_EWRPT
 	
 	;; 2.) Write Ethernet controller packet control byte
 	mov		al,SEND_CTRL_BYTE
-	call	HW_WRITE_BUFFER_MEMORY_BYTE ; expects AL to be the byte
+	call	NEAR PTR HW_WRITE_BUFFER_MEMORY_BYTE ; expects AL to be the byte
 	
 	;; 3.) Write rest of packet to buffer
-	push	si
-	push	cx
-	call	HW_WRITE_BUFFER_MEMORY
-	pop		cx
-	pop		si
+	call	NEAR PTR HW_WRITE_BUFFER_MEMORY
 	
 	;; 4.) Tell card where and how big packet is and send it
-	call	HW_SEND
-	
-	;; 5.) Wait until complete to continue
-	call	HW_WAIT_SEND_COMPLETE ; will loop until free
-	clc ; Clear carry
-	ret
-HAL_SEND_PKT_FAIL:
-	stc
+	call	NEAR PTR HW_SEND
+
+; 20251013 - only using the pre-check	
+;	;; 5.) Wait until complete to continue
+;	call	NEAR PTR HW_WAIT_SEND_COMPLETE ; will loop until free
+
+
+	clc ; Clear carry, for now always return success
 	ret
 HAL_SEND_PKT ENDP
 
@@ -1720,7 +1743,7 @@ HAL_SEND_PKT ENDP
 ;!! Input
 ;!!		NONE
 ;!! Output
-;!!		AX = packet size
+;!!		AX = packet size (includes FCS!)
 ;!! Uses directly
 ;!!		AX
 ;!! Calls
@@ -1731,18 +1754,18 @@ HAL_SEND_PKT ENDP
 ;!! Directly preserves
 ;!!		NONE
 ;!! Total destroy
-;!!		AX, DX, flags
+;!!		AX,DX,flags
 HAL_GET_PACKET_SIZE PROC NEAR
 	;; Set read pointer to beginning of memory
 	mov		ax,RX_ADDRESS_START
-	call	HW_SET_ERDPT
+	call	NEAR PTR HW_SET_ERDPT
 	;; First two bytes are "next packet pointer", discard those
-	call	HW_READ_BUFFER_MEMORY_WORD
+	call	NEAR PTR HW_READ_BUFFER_MEMORY_WORD
 	;; Second two bytes are the size
-	call	HW_READ_BUFFER_MEMORY_WORD
+	call	NEAR PTR HW_READ_BUFFER_MEMORY_WORD
 	push	ax ; Save packet size
 	;; Discard 3rd 2 bytes (remainder of status) to align the pointer
-	call	HW_READ_BUFFER_MEMORY_WORD
+	call	NEAR PTR HW_READ_BUFFER_MEMORY_WORD
 	pop		ax ; Return AX which now has the packet size
 	ret
 HAL_GET_PACKET_SIZE ENDP
@@ -1761,17 +1784,21 @@ HAL_GET_PACKET_SIZE ENDP
 ;!! Uses directly
 ;!!		NONE
 ;!! Calls
-;!!		HW_READ_BUFFER_MEMORY_MEMORY (AX, CX, DI, DX, flags)
+;!!		HW_READ_BUFFER_MEMORY_MEMORY (AX, DX, flags)
 ;!! Dependencies destroy
 ;!!		AX, DX, flags
 ;!! Directly preserves
 ;!!		NONE
 ;!! Total destroy
-;!!		AX, DX, flags
-HAL_RX PROC NEAR
-	call	HW_READ_BUFFER_MEMORY
-	ret
-HAL_RX ENDP
+;!!		AX,DX,flags
+
+
+;HAL_RX PROC NEAR
+HAL_RXP MACRO
+	call	NEAR PTR HW_READ_BUFFER_MEMORY
+ENDM
+;	ret
+;HAL_RX ENDP
 
 ;!! PROC
 ;!!		HAL_ENABLE_RX
@@ -1782,6 +1809,7 @@ HAL_RX ENDP
 ;!! Uses directly
 ;!!		AX, BX, CX
 ;!! Calls
+;!!		HAL_DISABLE_RX (AX, DX, flags)
 ;!!		HW_SET_CONTROLLER_BANK (AX, DX, flags, BANK)
 ;!!		HW_READ_ETH_REGISTER (AX, DX, flags)
 ;!!		HW_BIT_FIELD_SET (AX, DX, flags)
@@ -1795,20 +1823,25 @@ HAL_RX ENDP
 HAL_ENABLE_RX PROC NEAR ; Page 43 / Section 7.2
 	push	bx
 	push	cx
+	
+	;; 0.) Safety, disable RX
+	call NEAR PTR HAL_DISABLE_RX	
+	
 	;; 1.) Ack all packets (we only process one at a time and dump the rest)
 	mov		ah,BANK1
-	call	HW_SET_CONTROLLER_BANK
-	
+	call	NEAR PTR HW_SET_CONTROLLER_BANK
+
+HAL_ENABLE_RX_DEK_PKT:
 	mov		ah,EPKTCNT_REGISTER; - BANK1
-	call	HW_READ_ETH_REGISTER
+	call	NEAR PTR HW_READ_ETH_REGISTER
 	mov		cl,al
 	test	cl,cl ; Test if currently zero
 	jz		HAL_ENABLE_RX_CONT
 	xor		ch,ch
 HAL_ENABLE_RX_DEC_PKT_LOOP:
 	mov		ax,(ECON2_REGISTER SHL 8) OR (ECON2_PKTDEC_BIT); (Any BANK)
-	call	HW_BIT_FIELD_SET
-	loop	HAL_ENABLE_RX_DEC_PKT_LOOP
+	call	NEAR PTR HW_BIT_FIELD_SET
+	loop	HAL_ENABLE_RX_DEC_PKT_LOOP ; dec CX
 
 HAL_ENABLE_RX_CONT:
 	;; Reset read pointers
@@ -1818,29 +1851,30 @@ HAL_ENABLE_RX_CONT:
 		; Set RX buffer Start High/Low
 	mov		ax,(ERXSTH_REGISTER SHL 8) OR ERXSTL_REGISTER
 	mov		bx,RX_ADDRESS_START
-	call	HW_WRITE_REGISTER_LOW_HIGH
+	call	NEAR PTR HW_WRITE_REGISTER_LOW_HIGH
 		
 		; Set RX Buffer End High/Low
 	mov		ax,(ERXNDH_REGISTER SHL 8) OR ERXNDL_REGISTER
 	mov		bx,RX_ADDRESS_END
-	call	HW_WRITE_REGISTER_LOW_HIGH
+	call	NEAR PTR HW_WRITE_REGISTER_LOW_HIGH
 	
 		; Set Read Memory Pointers
 	mov		ax,(ERXRDPTH_REGISTER SHL 8) OR ERXRDPTL_REGISTER
 	mov		bx,RX_ADDRESS_START
-	call	HW_WRITE_REGISTER_LOW_HIGH
+	call	NEAR PTR HW_WRITE_REGISTER_LOW_HIGH
 	
-	;; Clear Packet Interrupt flag
-	mov		ax,(EIR_REGISTER SHL 8) OR EIR_PKTIF
-	call	HW_BIT_FIELD_SET
+	;; Clear Packet Interrupt flag ; Doesn't appear to be legal EIR Register datasheet
+	;mov	ax,(EIR_REGISTER SHL 8) OR EIR_PKTIF
+	;call	NEAR PTR HW_BIT_FIELD_SET
+	;call	NEAR PTR HW_BIT_FIELD_CLEAR
 	
 	;; Enable card interrupt (EIE_REGISTER - ANY BANK)
 	mov		ax,(EIE_REGISTER SHL 8) OR EIE_PKTIE OR EIE_INTIE
-	call	HW_BIT_FIELD_SET
+	call	NEAR PTR HW_BIT_FIELD_SET
 	
 	;; Enable card receive (ECON1_REGISTER - ANY BANK)
 	mov		ax,(ECON1_REGISTER SHL 8) OR ECON1_RXEN_BIT
-	call	HW_BIT_FIELD_SET
+	call	NEAR PTR HW_BIT_FIELD_SET
 	
 	pop		cx
 	pop		bx
@@ -1862,15 +1896,15 @@ HAL_ENABLE_RX ENDP
 ;!! Directly preserves
 ;!!		NONE
 ;!! Total destroy
-;!!		AX, DX, flags, card state
+;!!		AX,DX,flags
 HAL_DISABLE_RX PROC NEAR
 	;; Disable card receive (ECON1_REGISTER - ANY BANK)
 	mov		ax,(ECON1_REGISTER SHL 8) OR ECON1_RXEN_BIT
-	call	HW_BIT_FIELD_CLEAR
+	call	NEAR PTR HW_BIT_FIELD_CLEAR
 
 	;; Disable card interrupt (EIE_REGISTER - ANY BANK)
 	mov		ax,(EIE_REGISTER SHL 8) OR EIE_PKTIE OR EIE_INTIE
-	call	HW_BIT_FIELD_CLEAR
+	call	NEAR PTR HW_BIT_FIELD_CLEAR
 
 	;; TODO: Wait until card is not receiving?
 
@@ -1888,7 +1922,7 @@ HAL_DISABLE_RX ENDP
 ;!! Calls
 ;!!		TXRX_SOFT_RESET (AX, DX, flags, card state)
 ;!!		HW_READ_ETH_REGISTER (AX, DX, flags)
-;!!		TXRX_CLEAR_MEMORY (AX, CX, DX, SI, flags, ETH:BANK)
+;!!		TXRX_CLEAR_MEMORY (AX, DX, flags, ETH:BANK)
 ;!! Dependencies destroy
 ;!!		AX, DX, flags
 ;!! Directly preserves
@@ -1896,31 +1930,29 @@ HAL_DISABLE_RX ENDP
 ;!! Total destroy
 ;!!		AX, DX, flags, ETH:BANK, card state
 HAL_RESET PROC NEAR
-	push	cx
-	push	si
 	; 1.) Soft reset the card
-	call	HW_SOFT_RESET
+	call	NEAR PTR HW_SOFT_RESET
 	; 2.) Wait until the card recovers
 HAL_RESET_WAIT: ; Wait for reset to complete
 	mov		ah,ESTAT_REGISTER; (ANY_BANK)
-	call	HW_READ_ETH_REGISTER
+	call	NEAR PTR HW_READ_ETH_REGISTER
 	test	al,ESTAT_CLKRDY_BIT
 	jz		HAL_RESET_WAIT ; Wait until Clock ready
+	
+	;; Disabled for now
 	; 3.) Clear the card buffer memory
-	call	HW_CLEAR_MEMORY ; Clear the controller's memory
-	pop		si
-	pop		cx
+	;call	NEAR PTR HW_CLEAR_MEMORY ; Clear the controller's memory
 	ret
 HAL_RESET ENDP
 
 HAL_INIT PROC NEAR
 	; Card Initialization
-	call	HAL_RESET ; 1.) Reset
-	call	HW_SETUP_CONTROLLER_BUFFERS ; 2.) Setup Send + Receive Buffers
-	call	HW_SETUP_CONTROLLER_FILTERS ; 3.) Setup Receive filters
-	call	HW_SETUP_CONTROLLER_MODE ; 4.) Not necessary since ECON2 is already in autoinc
-	call	HW_SETUP_CONTROLLER_MAC ; 5.) Setup Media Access Control Layer
-	call	HW_SETUP_CONTROLLER_PHY ; 6.) Setup Physical Layer 
+	call	NEAR PTR HAL_RESET ; 1.) Reset
+	call	NEAR PTR HW_SETUP_CONTROLLER_BUFFERS ; 2.) Setup Send + Receive Buffers
+	call	NEAR PTR HW_SETUP_CONTROLLER_FILTERS ; 3.) Setup Receive filters
+	call	NEAR PTR HW_SETUP_CONTROLLER_MODE ; 4.) Not necessary since ECON2 is already in autoinc
+	call	NEAR PTR HW_SETUP_CONTROLLER_MAC ; 5.) Setup Media Access Control Layer
+	call	NEAR PTR HW_SETUP_CONTROLLER_PHY ; 6.) Setup Physical Layer 
 	ret
 HAL_INIT ENDP
 

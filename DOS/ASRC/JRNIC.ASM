@@ -16,21 +16,11 @@ INCLUDE JRMACROS.ASM
 PAGE
 CODESEG SEGMENT
 	assume CS:CODESEG, DS:CODESEG, SS:CODESEG
-	BEGINOFPROG EQU $	; Mark 0000h for calculations
+
+BEGINOFPROG EQU $	; Mark 0000h for calculations
 	ORG	100h
-	PROGRAM:
+PROGRAM:
 	jmp			NEAR PTR MAIN				; DOS Command Entry Point
-
-;; Ensure RAM segment has stack
-
-;driver_in_use	dw 0000h
-receive_offset	dw 0000h
-receive_segment	dw 0000h
-packet_size		dw 0000h
-
-MAC_ADDRESS_TABLE LABEL BYTE
-	db 00h, 03h, 01h, 04h, 01h, 05h ; Default made up source MAC address
-MAC_ADDRESS_TABLE_L EQU $-MAC_ADDRESS_TABLE
 
 PROGRAM_SIGNATURE:
 	drv_signature:
@@ -39,12 +29,25 @@ PROGRAM_SIGNATURE:
 	drv_signature_end:
 
 DRIVER_INFO: 
-	DRV_PKT_VERSION dw VER ; VERSION, BX (defined in JRBLDFLG.ASM)
-	DRV_IFCLASS db 1 ; CLASS, CH
-	DRV_IFTYPE dw 0FFFFh ; TYPE, DX
-	DRV_IFNUM db 0 ; NUMBER, CL
-	DRV_NAME db "jrNIC$",0 ; NAME, DS:SI
-	DRV_FUNC db 1 ; FUNCTIONALITY, AL
+	DRV_PKT_VERSION dw VER ; VERSION, BX (driver version, defined in JRBLDFLG.ASM)
+	DRV_IFCLASS db 1 ; CLASS, CH ("Bluebook" Ethernet class)
+	DRV_IFTYPE dw 0FFFFh ; TYPE, DX (Generic/Unspecified Mfr/Card type)
+	DRV_IFNUM db 0 ; NUMBER, CL (First (0th) interface card for 1(Bluebook)/FFFF(Generic))
+	DRV_NAME db "jrNIC$",0 ; NAME, DS:SI (Plain-text Name of the card)
+	DRV_FUNC db 1 ; FUNCTIONALITY, AL (Implements basic functions only)
+
+MAC_ADDRESS_TABLE LABEL BYTE
+	db 00h, 03h, 01h, 04h, 01h, 05h ; Default made up source MAC address
+MAC_ADDRESS_TABLE_L EQU $-MAC_ADDRESS_TABLE
+
+;; Vars
+;driver_in_use	dw 0000h
+receive_offset	dw 0000h
+receive_segment	dw 0000h
+packet_size		dw 0000h
+interuptee_stack_seg	dw 0000h
+interuptee_stack_ptr	dw 0000h
+
 
 PAGE
 %OUT Processing JRNICHAL
@@ -54,12 +57,20 @@ PAGE
 %OUT Processing jrNIC Utils
 INCLUDE JRUTIL.ASM
 
+;; Dummy receive handler, returns buffer size 0 aka error
+RCV_DUMMY_RET PROC FAR
+	xor		di,di
+	mov		es,di ;; Always reply no buffer available
+	ret
+RCV_DUMMY_RET ENDP
+
 ;; Assumes Carry set/cleared as intended
-;; Assumes all regs restored except bp
+;; Assumes all regs restored
 ;; Need to set IRET carry and then IRET
 INT_PKT_SVC_CLEANUPM MACRO
 	local	INT_PKT_SVC_IRET_GOOD
 	local	INT_PKT_SVC_IRET_BAD
+	push	bp	; Save caller BP
 	mov		bp,sp ; Get current stack pointer, should have nothing but BP + OFFSET + SEG + FLAGS
 				  ;    													6      4      2      0 
 	jc		SHORT INT_PKT_SVC_IRET_BAD
@@ -73,11 +84,11 @@ INT_PKT_SVC_IRET_BAD: ; Set carry flag on stack
 	iret
 ENDM
 
-;; ALL services must POP bx immediately
-;; Caller BP was pushed
-;; BP = current RESIDENT MEM DS
-;; ALL services must invoke INT_PKT_SVC_CLEANUPM macro to restore BP before IRET
-debug_INT_PKT_SVC_00 db "Service 00, ERROR$"
+;; Input: NA
+;; Output ERROR:
+;;		Set Carry flag
+;;		DH = BAD_COMMAND
+;; Output SUCCESS: NA (this is the error service)
 INT_PKT_SVC_00 PROC FAR ;; driver_error()
 	pop		bx ; Restore caller's BX
 				;; Point all invalid services here
@@ -87,108 +98,251 @@ INT_PKT_SVC_00 PROC FAR ;; driver_error()
 INT_PKT_SVC_00_CLEANUP:
 	INT_PKT_SVC_CLEANUPM
 INT_PKT_SVC_00 ENDP
-debug_INT_PKT_SVC_01 db "Service 01, Handle$"
+
+;; Input: BX (Handle, Optional)
+;; Output ERROR:
+;;		Set Carry flag
+;;		DH = Error Code (BAD_HANDLE)
+;; Output SUCCESS:
+;;		Clear Carry flag
+;;		BX = Driver Version
+;;		CH = Driver Interface Class (1h, Bluebook Ethernet class)
+;;		DX = Driver Interface Type (0FFFFh, "Generic/Unspecified")
+;;		CL = Driver Interface Number (0h, "attached card #1" of Bluebook Ethernet class/Generic type)
+;;		DS:SI = Driver Interface Name (plain-text "jrNIC$")
+;;		AL = Driver Supported Functions (1 - Basic)
+;; Good
 INT_PKT_SVC_01 PROC FAR ;; 6.3 driver_info()
 	pop		bx ; Restore caller's BX
-	
-	;push	ds
-	;mov	ds,bp ; Intentionally not setting DS = MEM because we need to return DS with other data
-	push	ax
+
+
+	push	ax ; Temporarily push AX to preserve AH
 	mov		ax,cs
-	mov		ds,ax ; Set DS:SI to driver data stored on CART/main RAM
-	mov		si,offset DRV_NAME ; Point DS:SI to the driver name
-	mov		bx,DRV_PKT_VERSION
-	mov		ch,DRV_IFCLASS
-	mov		dx,DRV_IFTYPE
-	mov		cl,DRV_IFNUM
-	;pop		ds ; Intentionally not restoring DS because we need to return it
-	pop		ax ; restore AH
-	mov		al,DRV_FUNC
-	clc
+	mov		ds,ax ; DS used for variables
+
+	;; Setup returns
+	clc							; Return success
+	mov		bx,[DRV_PKT_VERSION]
+	mov		ch,[DRV_IFCLASS]
+	mov		dx,[DRV_IFTYPE]
+	mov		cl,[DRV_IFNUM]
+	;mov		ax,cs
+	;mov		ds,ax				; DS:SI = NAME, DS already set
+	mov		si,offset DRV_NAME
+	pop		ax					; restore AH
+	mov		al,[DRV_FUNC]
 INT_PKT_SVC_01_CLEANUP:
 	INT_PKT_SVC_CLEANUPM
 INT_PKT_SVC_01 ENDP
 
-debug_INT_PKT_SVC_02 db "Service 02, Typelen$"
+;;;;;;
+; Notes
+;	1.) Currently only supports 1 user handle
+;	2.) Unconditionally sets, does not check if already owned
+;; Good
 INT_PKT_SVC_02 PROC FAR ;; 6.4 access_type() 
-	pop		bx ; Restore caller's BX
+	pop		bx	; Restore caller's BX
+				; All registers are currently caller's
 
-	;; NOTE - ASSUMES THIS WON'T BE CALLED FROM AN INT
-	;; NOTE - Currently only supports 1 user handle
-	;; NOTE - Unconditionally sets, does not check if already owned
+	; 1.) Need to fully lock down INTS/NMI/IRQ
+	;		to prevent accidental IRQ while changing RCV handle
+	;		and protect card access
+	; 2.) Ask card to disable RX (for safety)
+	; 3.) Set up receiver segment/offset
+	; 4.) Enable RX
+	; 5.) Restore IRQ (ensure IRQ4 is unmasked)
+
+	push	bp			; Use for scratch
+	mov		bp,ax		; Store caller's AX in BP, AX is now free
 	
-	push	ds
+	; Read current IRQ masks and push
+	in		al,port_pic_data	; Read current IRQ mask register
+	mov		ah,al				; Store current IRQ mask in AH
+		; Ex: If interrupted here, they will return here before letting us continue so card would be used and returned
+	; Externally Mask IRQs
+	mov		al,0FFh				; Set IRQ mask to *ALL* masked
+	out		port_pic_data,al	; IRQs masked, now disable NMI
+		; At this point, even if an NMI fires and re-enables INTs, all IRQs are masked so none can fire
+	
+	; Externally Mask NMI
+	mov		al,nmi_disable		; NMI disable bit
+	out		port_nmi_mask_reg,al; NMI masked
+		; At this point IRQs are masked and NMI is now masked, so it can no longer re-enable INTs
+	
+	; Disable Interrupts
+	cli							; Disable INTs
+		; At this point, IRQs masked, NMI masked, INTs disabled
+	
+	;; AH contains current IRQ Masks, BP contains user's AX
+
+	;; For now, not validating what they gave us
+	
 	push	ax
-	push	dx ; Save registers
-	
-	mov		ds,bp ; Set DS = MEM
-	
-	MASK_IRQ4M ;; Uses AX, Flags, Assumes this won't be called from a timer int
+	push	dx
+	push	ds
 	
 	;; Disable reception
 	call HAL_DISABLE_RX ; AX/DX/FLAGS
-	
-	; Setup receiver ES:DI seg:off
+
+	mov		ax,cs
+	mov		ds,ax ; Setup DATASEG=CS
+
+	;; Grab ES:SI (receiver handle) and store
 	mov		ax,es
 	mov		[receive_segment],ax
 	mov		[receive_offset],di
 	
-	;; Enable reception (clear out any pending packet pointers)
+	;; Enable Reception (currently still card masked)
 	call HAL_ENABLE_RX ; AX/DX/FLAGS
-	
-	;; Release call
-	UNMASK_IRQ4M ; Uses AX, Flags
-	
-	pop		dx ; Restore registers
-	pop		ax
+
 	pop		ds
-	mov		ax,1 ; Handle
-	clc		; Mark as successful
+	pop		dx
+	pop		ax	; AH has current IRQ Masks, BP (on stack) still has user's AX
+	
+	; Enable interrupts
+	sti 
+	
+	; Enable NMI
+	mov		al,nmi_enable
+	out		port_nmi_mask_reg,al	; Restore NMI
+	in		al,port_nmi_mask_reg	; Read Port to clear latch,
+									; For case a key was pressed
+									; while NMI was masked
+	
+	; Externally Restore IRQs (and unmask IRQ4)
+	mov		al,ah ; AL has old mask, need to unmask IRQ4
+	and		al,NOT mask_modem_bit ; 1110 1111 clear/activate IRQ 
+	out		port_pic_data,al
+	
+	pop		bp ; get back caller's original BP, discard AX since we don't need it
+	
+	;; Card is unmasked now and user's regs restored, set returns
+	clc
+	mov		ax,1 ; Set return handle to 1
 INT_PKT_SVC_02_CLEANUP:
 	INT_PKT_SVC_CLEANUPM ;; -- Exits
 INT_PKT_SVC_02 ENDP
 
 ;; release type needs to mask driver
-debug_INT_PKT_SVC_03 db "Service 03, Handle$"
+;; Good
 INT_PKT_SVC_03 PROC FAR ;; 6.5 release_type()
 	pop		bx ; Restore caller's BX
 
-	push	ds
+	; 1.) Need to fully lock down INTS/NMI/IRQ
+	;		to prevent accidental IRQ while changing RCV handle
+	;		and protect card access
+	; 2.) Ask card to disable RX
+	; 3.) Set receiver segment/offset to dummy
+	; 4.) Restore IRQ (mask IRQ4)
+
+
+	push	bp		; Push caller's BP
+	mov		bp,ax	; Save caller's AX in BP
+
+	; Read current IRQ masks and push
+	in		al,port_pic_data	; Read current IRQ mask register
+	mov		ah,al				; Store current IRQ mask in AH
+		; Ex: If interrupted here, they will return here before letting us continue so card would be used and returned
+	; Externally Mask IRQs
+	mov		al,0FFh				; Set IRQ mask to *ALL* masked
+	out		port_pic_data,al	; IRQs masked, now disable NMI
+		; At this point, even if an NMI fires and re-enables INTs, all IRQs are masked so none can fire
+	
+	; Externally Mask NMI
+	mov		al,nmi_disable		; NMI disable bit
+	out		port_nmi_mask_reg,al; NMI masked
+		; At this point IRQs are masked and NMI is now masked, so it can no longer re-enable INTs
+	
+	; Disable Interrupts
+	cli							; Disable INTs
+		; At this point, IRQs masked, NMI masked, INTs disabled
+	
+	;; AH contains current IRQ Masks, BP contains user's AX
+
+	;; For now, not validating what they gave us
 	push	ax
-	push	dx ; Save registers
-
-	mov		ds,bp ; Set DS = MEM
-
-	MASK_IRQ4M ;; Uses AX, Flags Assumes this won't be called from a timer int, uses AX
-
+	push	dx
+	push	ds
+	
 	;; Disable reception
 	call HAL_DISABLE_RX ; AX/DX/FLAGS
 
-	; Setup dummy receiver seg:off
 	mov		ax,cs
-	mov		[receive_segment],ax 
-	mov		[receive_offset],offset RCV_DUMMY_RET
+	mov		ds,ax ; Setup DATASEG=CS
 
-;; 20251009 - Only enabling when an app is actively receiving
-	;; Enable reception (clear out any pending packet pointers)
-;	call HAL_ENABLE_RX ; AX/DX/FLAGS
+	;; Set receive to <cs>:<RCV_DUMMY_RET>
+	mov		ax,cs
+	mov		ds,ax
+	mov		[receive_segment],ax ; 
+	mov		[receive_offset],offset	RCV_DUMMY_RET
 	
-	;; Release call
-;	UNMASK_IRQ4M ; Uses AX, flags
-;; 20251009 - End
-	pop		dx ; Restore registers
-	pop		ax
 	pop		ds
-
-	clc		; Mark as successful
+	pop		dx
+	pop		ax	; AH has current IRQ Masks, BP (on stack) still has user's AX
+	
+	; Enable interrupts
+	sti 
+	
+	; Enable NMI
+	mov		al,nmi_enable
+	out		port_nmi_mask_reg,al	; Restore NMI
+	in		al,port_nmi_mask_reg	; Read Port to clear latch,
+									; For case a key was pressed
+									; while NMI was masked
+	
+	; Externally Restore IRQs (and mask IRQ4)
+	mov		al,ah ; AL has old mask, need to mask IRQ4
+	or		al,mask_modem_bit ; 0001 0000 set/disable IRQ 
+	out		port_pic_data,al
+	
+	mov		ax,bp ; Restore caller's AX
+	pop		bp ; get back caller's original BP
+	
+	;; Card is masked now and user's regs restored, set return
+	clc
 INT_PKT_SVC_03_CLEANUP:
 	INT_PKT_SVC_CLEANUPM	
 INT_PKT_SVC_03 ENDP
 
-;;;;;;;;;;;;;
-;; INT_PKT_SVC_04 IMPLEMENTED in the core INT_PKT_ENTER default path
-;;;;;;;;;;;;;
+INT_PKT_SVC_04 PROC FAR  ;; 6.6 send_pkt()
+	pop		bx	; Restore caller's BX
+	
+	push	ax	; Push caller's AX (used for scratch)
+	; Mask All Interupts Dance
+	; 1.) Save initial IRQ masks
+	in		al,port_pic_data		; Get current IRQ masks
+	mov		ah,al					; Hold current IRQ masks in AH
+	; 2.) Mask IRQs
+	mov		al,0FFh					; Mask all IRQs
+	out		port_pic_data,al		; IRQs masked
+	; 3.) Mask NMI
+	mov		al,nmi_disable			; Bit 7 = 0
+	out		port_nmi_mask_reg,al	; Mask NMI
+	; 4.) Mark IRQs as disabled with CPU flag
+	cli								;post NMI disable
+	; 5.) Unmask IRQs now that they're disabled
+	mov		al,ah					; Recover IRQ mask
+	out		port_pic_data,al		; Un-mask IRQs (still blocked by CLI)
+	
+	;; SAFE TO GO NOW
+	
+	; Access card
+	push	dx	; Push caller's DX (used during card send)
+	call	HAL_SEND_PKT ; uses AX, DX
+	pop		dx
+	; Unmask NMI
+	mov		al,nmi_enable
+	out		port_nmi_mask_reg,al	; Restore NMI
+	
+	; IRQ's re-enabled when exiting
+	pop		ax ; Recover caller's AX
+	clc			; Return good always (if it fails, they can always resend)
+	INT_PKT_SVC_CLEANUPM ;; ----- EXIT INT_PKT_SVC_04, interrupts will be restored
+INT_PKT_SVC_04 ENDP	
 
+;; Good
+; Doesn't access the card
+; TODO - implement
 INT_PKT_SVC_05 PROC FAR ;; terminate()
 	pop		bx ; Restore caller's BX
 
@@ -197,38 +351,49 @@ INT_PKT_SVC_05 PROC FAR ;; terminate()
 	INT_PKT_SVC_CLEANUPM
 INT_PKT_SVC_05 ENDP
 
+; Doesn't access card
 INT_PKT_SVC_06 PROC FAR ;; get_address()
 	pop		bx ; Restore caller's BX
 
 	push	ax
 	push	ds
-	mov		ds,bp ; Set DS = MEM
-INT_PKT_SVC_06_CHK_SIZE:
+
+	mov		ax,cs
+	mov		ds,ax ; Set DS
+	
+	;; Check if client has enough space for buffer
 	cmp		cx,MAC_ADDRESS_TABLE_L ; Compare available buffer space to table Length
-	jae		INT_PKT_SVC_06_CONT
-	mov		dh,NO_SPACE
-	stc		; Indicate error
-	jmp		INT_PKT_SVC_06_CLEANUP
-INT_PKT_SVC_06_CONT:
-	; Set DS:SI to MAC address table
-		; DS already set to MEM
+	jb		INT_PKT_SVC_06_FAIL ; If they don't have the space, bail
+	
+	;; Else, copy the MAC into their ES:DI buffer
+	mov		cx,MAC_ADDRESS_TABLE_L ; Set count to MAC_ADDRESS_TABLE_L
 	push	si
 	push	di
 	mov		si,offset MAC_ADDRESS_TABLE
-	mov		cx,MAC_ADDRESS_TABLE_L ; set count to MAC_ADDRESS_TABLE_L
-	;; ES:DI = receive buffer
+
+	;; ES:DI = receive buffer already
 	cld
 	rep		movsb ; Copy MAC address, modifies SI, DI, and CX
+
 	pop		di
 	pop		si
-	mov		cx,MAC_ADDRESS_TABLE_L
+; Setup returns
+	mov		cx,MAC_ADDRESS_TABLE_L ; Set count to MAC_ADDRESS_TABLE_L
 	clc
 INT_PKT_SVC_06_CLEANUP:
 	pop		ds
 	pop		ax
 	INT_PKT_SVC_CLEANUPM
+INT_PKT_SVC_06_FAIL: ; Client didn't have the space, bail out
+; Setup returns
+	stc
+	mov		dh,NO_SPACE
+	jmp		INT_PKT_SVC_06_CLEANUP
 INT_PKT_SVC_06 ENDP
 
+;; Good
+; Doesn't (currently) access the card
+; TODO - implement
 INT_PKT_SVC_07 PROC FAR ;; reset_interface()
 	pop		bx ; Restore caller's BX
 	
@@ -237,38 +402,9 @@ INT_PKT_SVC_07 PROC FAR ;; reset_interface()
 	INT_PKT_SVC_CLEANUPM
 INT_PKT_SVC_07 ENDP
 
-;; Returns ES:DI = receiver function
-;; Returns AX = in use/handle
-INT_PKT_SVC_08_DEBUG PROC FAR
-	pop		bx ; Restore caller's BX
-	push	ds
-	mov		ds,bp ; Set DS
-	mov		di,[receive_segment]		
-	mov		es,di
-	mov		di,[receive_offset]
-	mov		ax,1 ; Handle
-	pop		ds
-	clc
-	INT_PKT_SVC_CLEANUPM
-INT_PKT_SVC_08_DEBUG ENDP
-
-
-;; API
-;; INT CALLED / IRQ TRIGGERED
-;; INT/IRQ ENTER (in MEMORY):
-;; jmp NEAR INT/IRQ CONTINUE:
-;; - <sig>
-;; - <prog>
-;; - <driver>
-;; INT/IRQ CONTINUE:
-;; push bp/push ax ; push caller's bp or ax
-;; mov bp/ax, cs ; MEMORY SEG FOR DS
-;; jmp FAR INT/IRQ ACTUAL (in ROM)
-;; - <do stuff>
-;; - <carry fiddling for ret if necessary>
-;; pop bp/ax ; restore caller's bp
-;; iret
-
+; Called services must:
+; 1.) Immediately pop BX to retrieve caller's BX
+; 2.) Must ensure proper carry is returned
 INT_PKT_SVC_TABLE LABEL WORD
 	dw		OFFSET INT_PKT_SVC_00 ; driver_error()
 	dw		OFFSET INT_PKT_SVC_01 ; driver_info()
@@ -278,188 +414,167 @@ INT_PKT_SVC_TABLE LABEL WORD
 	dw		OFFSET INT_PKT_SVC_05 ; terminate()
 	dw		OFFSET INT_PKT_SVC_06 ; get_address()
 	dw		OFFSET INT_PKT_SVC_07 ; reset_interface()
-	dw		OFFSET INT_PKT_SVC_08_DEBUG ; debug_get_receiver()
 INT_PKT_SVC_TABLE_L EQU $-INT_PKT_SVC_TABLE ; Length of table
-
-INT_PKT_HANDLE_OTHER PROC NEAR ;; Handle all INT_PKT services except 04h
-	;; Handle other services except 04 (send)
-	push	bx		; Save caller's BX, used for temporary offset
+INT_PKT PROC FAR
+	jmp		NEAR PTR INT_PKT_START ; jmp over signature to continue
+	pkt_drvr_signature	db "PKT DRVR",00h ; Required Packet Driver spec signature
+	prog_signature		dw	offset PROGRAM_SIGNATURE ; Pointer to Program signature
+INT_PKT_START:
+	sti				; It'll take us a while to actually stop them anyway...
+	push	bx		; Save caller BX, frees BX for scratch
+	mov		bl,ah	; Move caller's AH (SVC#) to bl
+	
+	;; Setup offset calculation into packet service table, BL contains caller's AH (SVC#)
+	sal		bl,1	; SVC * 2 = INT_PKT_SVC_TABLE entry offset
+	cmp		bl,INT_PKT_SVC_TABLE_L ; Check if command is valid
+	jae		INT_PKT_BAD_SVC ; If bad command go deal with that
+INT_PKT_SVC_EXEC: ;; Else if good, jump to service handler
 	xor		bh,bh	; Zero out upper address, valid BX values are 0-(14-1) decimal
-					; so this is safe
-	mov		bl,ah	; AH was SVC, move to bl
-	sal		bl,1	; SVC * 2 = INT_PKT_SVC_TABLE entry
-	cmp		bl,INT_PKT_SVC_TABLE_L ; check if command is valid
-	jb		INT_PKT_SVC_EXEC ; if yes, continue
-	xor		bl,bl	; if no, force driver_error() handler
-INT_PKT_SVC_EXEC: ;; Jump to service handler
-	;; Requirements
-	;; 0.) SVC entry: caller BX, caller BP on the stack (needed for exit)
-	;; 1.) SVC should pop BX immediately
-	;; 2.) If using card, check (needs AX) FORCE_MASK_IRQ_CHECKM
-	;;		a.) If card available	: DISABLE_RX (needs AX, DX)
-	;;								: DO STUFF
-	;;								: ENABLE_RX (needs AX,DX)
-	;;								: UNMASK_IRQ4M (needs AX)
-	;;								: Clear Carry
-	;;		b.) If card unavailable : Set DH, Set Carry
-	;; 3.) Set/clear IRET stack carry (+6), pop BP, iret
+					; So this is safe
 	jmp		WORD PTR CS:[BX + OFFSET INT_PKT_SVC_TABLE] ; BX contains service handler offset
-INT_PKT_HANDLE_OTHER ENDP
+INT_PKT_BAD_SVC: ; If a bad command...
+	xor		bl,bl	; if bad svc requested, force driver_error() handler
+	jmp		SHORT INT_PKT_SVC_EXEC ; now go execute it	
+INT_PKT ENDP
 
-INT_PKT_ENTER PROC FAR
-	jmp		NEAR PTR INT_PKT_ENTER_CONT ; jmp over signature to continue
-	drvr_signature	db "PKT DRVR",00h ; Required Packet Driver signature
-INT_PKT_ENTER_CONT:
-	push	bp		; Preserve caller's BP on caller's stack
-					; Uses BP because that is not a parameter used in the PKT DRV spec
-	mov		bp,cs	; Give real PKT_INT the MEMORYSHIMBEGIN segment in BP
-					; CS:INT_PKT_ENTER must clean up stack
-	;jmp		NEAR PTR INT_PKT_ACTUAL ; TODO --- , replace with jmp FAR PTR, need to edit destination with init code
-INT_PKT_ACTUAL:
-	sti			; Re-enable Interrupts
-	cmp		ah,04h ;; Priority path is AH=04h[send_packet()], make that the default / no jump
-	jnz		INT_PKT_HANDLE_OTHER ;; All other functions can jump elsewhere to be handled slower
-INT_PKT_SVC_04: ; Else this is service 04h, handle here
-	; pop		bx ; Restore caller's BX, no longer necessary since this path doesn't use BX for a table lookup
-	;; This could be called from a timer int, so need to
-	;; conditionally reserve card
+
+
+;; IRQ for Receive
+;; This must preserve ALL registers and state
+;; To get here, interrupts *must* have been enabled, disabled on entry
+;; To get here, IRQ4 *must* have been unmasked
+;; Don't currently know what the status of NMI is,
+;;   Have to assume if interrupts were enabled and IRQ4 was enabled
+;;   that NMI was enabled...
+;; NOTE: CPU INT process to get here puts 6 bytes on interruptee's stack
+;;		This routine puts another 8 bytes (14 total) intentionally
+;;		It is *possible* (though unlikely) that NMI could fire and a higher priority IRQ could also fire
+;;		Prior to fully disabling, leading to a seemingly worse case scenario:
+;;			6(this) + 2(this before disable) + 6(INT48) + 6(INT9) + 6(other IRQ)
+IRQ_RECV PROC FAR
+;interuptee_stack_seg	dw 0000h
+;interuptee_stack_ptr	dw 0000h
 	push	ax
-	;; Ensure we're not interrupting another send or receive process
-	FORCE_MASK_IRQ_CHECKM ; Uses AX, flags
-	jnz		INT_PKT_SVC_04_CANT_SND_PKT ; If in use, need to bail out
-INT_PKT_SVC_04_SND_PKT: ; Else, we've now reserved it so carry on
+	push	ds		; Push interuptee's AX (scratch) and DS (segment)
+	
+	mov		ax,cs
+	mov		ds,ax	; Setup local DS to our memory shim
+	jmp		IRQ_RECV_MAIN ; Placeholder to eventually support cartridge
+IRQ_RECV_MAIN:
+	mov		ax,ss
+	mov		[interuptee_stack_seg],ax	
+	mov		[interuptee_stack_ptr],sp	; Save interuptee's SS/SP
+
+	; Mask All Interupts Dance
+	; 1.) Save initial IRQ masks
+	in		al,port_pic_data		; Get current IRQ masks
+	mov		ah,al					; Hold current IRQ masks in AH
+	; 2.) Mask IRQs
+	mov		al,0FFh					; Mask all IRQs
+	out		port_pic_data,al		; IRQs masked
+	; 3.) Mask NMI
+	mov		al,nmi_disable			; Bit 7 = 0
+	out		port_nmi_mask_reg,al	; Mask NMI
+	; 4.) Mark IRQs as disabled with CPU flag
+	cli								;post NMI disable
+	; 5.) Unmask IRQs now that they're disabled
+	mov		al,ah					; Recover IRQ mask
+	out		port_pic_data,al		; Un-mask IRQs (still blocked by CLI)
+	
+	;; Swap to internal stack
+	mov		ax,ds ; Our memory shim
+	mov		ss,ax
+	;mov		sp,offset STACK_RECV_OFFSET
+	mov		sp,offset STACK_OFFSET
+	
+	;; SAFE TO GO NOW
+		
+	; Push anything we need
+;	push	ax ; Not needed
+	push	bx
+	push	cx
 	push	dx
-	call	HAL_SEND_PKT; Sets carry for fail, clears for success
+	push	bp
+	push	si
+	push	di
+;	push	ds ; Not needed
+	push	es
+	
+	;; --- Begin card accesses
+	call	HAL_GET_PACKET_SIZE ; get packet size into AX (uses AX/DX/FLAGS), sets READ_PTR
+	;; Ideally would check for zero
+	sub		ax,4 ; Subtract Frame Check Sequence from length (Per Packet Spec)
+	mov		[packet_size],ax	; Save packet size
+	
+	;; Copy packet to internal buffer so we can release the card
+	mov		cx,ax
+	mov		ax,cs
+	mov		es,ax	; Setup ES
+	mov		di,offset	RECV_BUFFER_OFFSET
+	HAL_RXP ; Macro, uses AX/DX - Input: ES:DI, CX
+	; Re-enable reception
+	call	HAL_ENABLE_RX ; Re-enable/reset reception (uses AX/DX/flags)
+	;; --- Card accesses complete
+		
+	;; Re-enable other interrupts (we haven't yet acknowledged IRQ4 so it shouldn't fire again)
+		; Unmask NMI
+	mov		al,nmi_enable
+	out		port_nmi_mask_reg,al	; Restore NMI
+		; Re-enable interrupts now that card accesses are complete
+	sti							; Interrupts re-enabled
+	
+	;; Ok, now tell receiver (call 1) we have a packet, ask if they have room for it
+	sub		ax,ax	; First call flag (0)
+	mov		bx,1	; handle
+	mov		cx,[packet_size]
+	call	DWORD PTR [receive_offset] ; returns ES:DI buffer, 0:0 if no room
+	
+	;; Check ES:DI for zero:zero (would mean client can't take the packet)
+	mov		ax,es
+	or		ax,di
+	jz		IRQ_RECV_END_PROCESSING ; They can't take the packet, bail
+	
+	;; Else, copy to receivers buffer (ES:DI is set, DS is set, need to set SI and CX)
+	mov		si,offset	RECV_BUFFER_OFFSET
+	mov		cx,[packet_size]
+	; store important data for next call
+	push	cx
+	push	di
+	push	es
+	push	ds 
+	cld
+	rep		movsb	; Move DS:[SI] to ES:[DI], inc SI, inc DI, dec CX
+	
+	;; Ok, now tell receiver (call 2) the packet is there
+	pop		es ; Our old DS
+	pop		ds ; Their old ES
+	pop		si ; Their old DI
+	pop		cx ; Packet size
+	push	es ; Our "ds", Packet driver isn't obligated to save this
+	call	DWORD PTR es:[receive_offset]
+	pop		ds ; put back in DS
+IRQ_RECV_END_PROCESSING:	
+		;; Restore regs
+	pop		es
+;	pop		ds
+	pop		di
+	pop		si
+	pop		bp
 	pop		dx
-	pushf	; Save flag
-	UNMASK_IRQ4M ; Uses AX,flags Release card
-	popf	; Restore flag
-	jc		INT_PKT_SVC_04_CANT_SND_PKT
-INT_PKT_SVC_04_CLEANUP:
-	pop		ax
-	INT_PKT_SVC_CLEANUPM
-INT_PKT_SVC_04_CANT_SND_PKT: ; Signal error
-	mov		dh,CANT_SEND
-	stc
-	jmp		INT_PKT_SVC_04_CLEANUP
-; INT_PKT_SVC_04 END
-INT_PKT_ENTER ENDP
+	pop		cx
+	pop		bx
+;	pop		ax	; No need to restore AX	
+	
+	; Swap back to old stack
+	mov		ax,[interuptee_stack_seg]
+	mov		ss,ax
+	mov		sp,[interuptee_stack_ptr]	; Restore interuptee's SS/SP
 
-;; Dummy receive handler, returns buffer size 0 aka error
-RCV_DUMMY_RET PROC FAR
-	xor		di,di
-	mov		es,di ;; Always reply no buffer available
-	ret
-RCV_DUMMY_RET ENDP
-
-
-;; IRQ
-; Needs to unmask interrupts
-; Needs to acknowledge PIC IRQ
-IRQ_RCV_ENTER PROC FAR
-	; - Level 1 - Start
-	push	ax ; Save Interuptee's AX on Interuptee's stack
-	mov		ax,cs ; Pass in Resident MEM/DS
-IRQ_RCV_ACTUAL:
-	; -- Level 2 - Start
-		push	ds
-		push	dx
-		push	bp  ; Save Interuptee's DS, DX, BP on Interuptee's stack
-		
-		mov		ds,ax ; DS = Resident MEM/DS, ax is now free
-		MASK_IRQ4M	; Uses AX, Mask interrupts Unconditionally
-					; since we got here via interrupt and haven't (yet)
-					; re-enabled them, nothing else can be using the card
-					; TECHNICALLY a bad NMI could've re-enabled interrupts
-					; but also then they would run their code and return
-					; before we continue
-					; And also a bad NMI wouldn't re-enable the mask?...
-					; Card not in use and is now marked for use
-		sti
-		call	HAL_DISABLE_RX ; Disable further reception (uses AX/DX/FLAGS)
-
-		;; Check that packet size is > 0
-		call	HAL_GET_PACKET_SIZE ; get packet size into AX, uses AX/DX/FLAGS	
-		cmp		ax,0h ; just in case packet is somehow zero?
-		je		IRQ_RCV_RANGE_JMP_DONE ; Shouldn't be possible, but whatever...
-		mov		[packet_size],ax ; Save packet size
-
-		;;; Setup Internal Stack
-		mov		dx,ss ; Save interuptee's ss:sp in registers
-		mov		bp,sp
-		
-		mov		ax,ds ; Intentional due to it being the RAM segment
-		mov		ss,ax ; Temporarily disables interrupts
-		mov		sp,RESIDENT_SIZE
-		
-		; Push EVERYTHING
-		;push ax ; already preserved
-		push bx
-		push cx
-		push dx ; interuptee's stack segment
-		push bp ; interuptee's stack pointer
-		push si
-		push di
-		;push ds ; already preserved
-		push es
-		
-			;;; SAFETY ZONE
-			;; Ask receiver if it can take the packet
-			xor		ax,ax ; first call flag is 0
-			mov		bx,1 ; Handle
-			mov		cx,[packet_size] ; CX = packet size in bytes
-			call	DWORD PTR [receive_offset] ; returns ES:DI buffer, 0:0 if can't hold the packet
-		
-			; Check if caller gave us a good buffer back. ES:DI == 0:0 if buffer bad, else good
-			mov		ax,es
-			or		ax,di
-			jz		IRQ_RCV_NOTIFY_DONE ; if both were zero, bail out
-IRQ_RCV_NOTIFY_COPY: ; Ok go-ahead and copy
-			;; ES:DI is the destination
-			push	di
-			mov		cx,[packet_size]
-			call	HAL_RX ; copy packet to buffer
-			pop		si
-			push	es ; Pushed Buffer Segment
-			mov		ax,ds
-			mov		es,ax ; ES = MEMORY SHIM
-			pop		ds ; DS:SI = buffer
-			mov		ax,1 ; second call flag
-			mov		bx,1 ; handle
-			mov		cx,[packet_size]
-			call	DWORD PTR ES:[receive_offset] 
-IRQ_RCV_NOTIFY_DONE:		
-		;;; END ZONE
-		
-		;; Pop EVERYTHING
-		pop es
-		;pop ds ; already preserved
-		pop di
-		pop si
-		pop bp ; interuptee's stack pointer
-		pop dx ; interuptee's stack segment
-		pop cx
-		pop bx
-		;pop ax ; already preserved
-		
-		;;; Restore Interuptee Stack
-		mov ss,dx ; Temporarily disables interrupts
-		mov sp,bp
-
-IRQ_RCV_RANGE_JMP_DONE:
-		call	HAL_ENABLE_RX ; Conditionally Re-enable reception
-		UNMASK_IRQ4M ; Uses AX, Mask interrupts Unconditionally
-		
-		pop		bp   ; Restore Interuptee's DS, DX, BP from Interuptee's stack
-		pop		dx
-		pop		ds
-		
-	; -- Level 2 - End
+	pop		ds							; Restore interuptee's DS
 	ACK_IRQM ; Requires AX, ACK PIC IRQ
-	pop		ax ; Restore Interuptee's AX from Interuptee's stack
-	; - Level 1 - End
+	pop		ax
 	iret
-IRQ_RCV_ENTER ENDP
+IRQ_RECV ENDP
 
 
 
@@ -472,15 +587,6 @@ MAIN PROC FAR
 	; Set DS
 	mov		ax,cs
 	mov		ds,ax
-
-	; Move Stack to within TSR space
-	mov		ax,cs
-	mov		ss,ax ; set sack segment, disables interrupts for one instruction
-	mov		sp,RESIDENT_SIZE	; End of program memory, re-enables interrupts
-	
-	; Re-add default 0 to stack
-	xor		ax,ax
-	push	ax ; Should not be popped
 	
 	; Ensure RCV HW IRQ is masked when driver is loaded
 	MASK_IRQ4M ; Uses AX, Flags
@@ -490,29 +596,21 @@ MAIN PROC FAR
 	mov		[receive_segment],ax
 	mov		[receive_offset],offset RCV_DUMMY_RET
 
-	; Setup Interrupt INT_PKT_ENTER (sender API)
-	mov		dx,offset INT_PKT_ENTER ; DS:DX = segment/offset
+	; Setup Interrupt INT_PKT (sender API)
+	mov		dx,offset INT_PKT ; DS:DX = segment/offset
 	mov		ah,svc_dos_set_interrupt_25
 	mov		al,int_default_pkt_driver
 	int		int_dos_21
 	
-	; Setup Interrupt IRQ_RCV_ENTER (receive HW IRQ)
-	mov		dx,offset IRQ_RCV_ENTER ; DS:DX = segment/offset
+	; Setup Interrupt IRQ_RECV (receive HW IRQ)
+	mov		dx,offset IRQ_RECV ; DS:DX = segment/offset
 	mov		ah,svc_dos_set_interrupt_25
 	mov		al,int_modem
 	int		int_dos_21
 	
-	; Reset, initialize, and enable card
-	call	HAL_RESET
+	; Initialize, ENABLE_RX and UNMASK will be done upon access_type() (SVC_02) call
 	call	HAL_INIT
-;; 20251009 - Only enabling when an app is actively receiving
-;	call	HAL_ENABLE_RX
-	
-	; Umask RCV HW IRQ
-;	UNMASK_IRQ4M ; Uses AX, Flags
-;; 20251009 - END
-	
-	
+
 	; TSR
 	mov		dx,RESIDENT_PARA  ; DS:DX = Resident Location + Paras to retain
 	mov		ax,(svc_dos_keep_resident_31 SHL 8) OR val_dos_terminate_00
