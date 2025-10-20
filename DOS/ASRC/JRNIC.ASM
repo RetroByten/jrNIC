@@ -2,7 +2,13 @@ TITLE jrNIC - Packet Driver
 PAGE 66,132 ; 66 lines per page, 99 characters/line
 
 ; Starting from dev_packet_driver_development (works *iff* using int13fix)
-;	1.) Adding entry shim for IRQ_RECV
+;	1.) Adding entry shim for IRQ_RECV (commited)
+;	2.) Adding entry shim for INT_PKT (commited)
+
+;; Outstanding Issue 1
+;; After running INT13FIX, then JRNIC, then connect locally to netdrive
+;; While typing it *seems* possible to blow the stack if we receive a packet
+;;	- Which we receive packets all the time just from general network chatter
 
 PAGE
 %OUT Processing jrNIC Build Flags
@@ -31,6 +37,16 @@ BEGINOFPROG EQU $	; Mark 0000h for calculations
 	ORG	100h
 PROGRAM:
 	jmp			NEAR PTR MAIN				; DOS Command Entry Point
+INT_PKT_SHIM PROC FAR
+	jmp		NEAR PTR INT_PKT_SHIM_START
+	pkt_drvr_signature	db "PKT DRVR",00h ; Required Packet Driver spec signature
+	prog_signature		dw	offset PROGRAM_SIGNATURE ; Pointer to Program signature
+INT_PKT_SHIM_START:
+	push	bp			; Store caller's BP
+	mov		bp,cs		; Store MEMORYSEGMENT in BP
+INT_PKT_SHIM_JMP:
+	jmp		FAR PTR		PLACEHOLDER_JMP ; Placeholder, will be replaced at runtime with jump to INT_PKT
+INT_PKT_SHIM ENDP
 IRQ_RECV_SHIM PROC FAR
 	push	ax			; Store interuptee's AX
 	mov		ax,cs		; Store MEMORYSEGMENT in AX
@@ -87,7 +103,7 @@ RCV_DUMMY_RET ENDP
 INT_PKT_SVC_CLEANUPM MACRO
 	local	INT_PKT_SVC_IRET_GOOD
 	local	INT_PKT_SVC_IRET_BAD
-	push	bp	; Save caller BP
+	;push	bp	; Save caller BP (already on stack now)
 	mov		bp,sp ; Get current stack pointer, should have nothing but BP + OFFSET + SEG + FLAGS
 				  ;    													6      4      2      0 
 	jc		SHORT INT_PKT_SVC_IRET_BAD
@@ -133,9 +149,10 @@ INT_PKT_SVC_01 PROC FAR ;; 6.3 driver_info()
 	pop		bx ; Restore caller's BX
 
 
-	push	ax ; Temporarily push AX to preserve AH
-	mov		ax,cs
-	mov		ds,ax ; DS used for variables
+;	push	ax ; Temporarily push AX to preserve AH
+;	mov		ax,cs
+;	mov		ds,ax ; DS used for variables
+	mov		ds,bp ; DS == MEMORYSHIM
 
 	;; Setup returns
 	clc							; Return success
@@ -146,7 +163,7 @@ INT_PKT_SVC_01 PROC FAR ;; 6.3 driver_info()
 	;mov		ax,cs
 	;mov		ds,ax				; DS:SI = NAME, DS already set
 	mov		si,offset DRV_NAME
-	pop		ax					; restore AH
+;	pop		ax					; restore AH
 	mov		al,[DRV_FUNC]
 INT_PKT_SVC_01_CLEANUP:
 	INT_PKT_SVC_CLEANUPM
@@ -169,8 +186,10 @@ INT_PKT_SVC_02 PROC FAR ;; 6.4 access_type()
 	; 4.) Enable RX
 	; 5.) Restore IRQ (ensure IRQ4 is unmasked)
 
-	push	bp			; Use for scratch
-	mov		bp,ax		; Store caller's AX in BP, AX is now free
+;	push	bp			; Use for scratch
+;	mov		bp,ax		; Store caller's AX in BP, AX is now free
+
+;	push	ax			; Store caller's AX
 	
 	; Read current IRQ masks and push
 	in		al,port_pic_data	; Read current IRQ mask register
@@ -201,8 +220,10 @@ INT_PKT_SVC_02 PROC FAR ;; 6.4 access_type()
 	;; Disable reception
 	call HAL_DISABLE_RX ; AX/DX/FLAGS
 
-	mov		ax,cs
-	mov		ds,ax ; Setup DATASEG=CS
+;	mov		ax,cs
+;	mov		ds,ax ; Setup DATASEG=CS
+	mov		ds,bp	; DS==MEMORYSEG
+
 
 	;; Grab ES:SI (receiver handle) and store
 	mov		ax,es
@@ -231,7 +252,7 @@ INT_PKT_SVC_02 PROC FAR ;; 6.4 access_type()
 	and		al,NOT mask_modem_bit ; 1110 1111 clear/activate IRQ 
 	out		port_pic_data,al
 	
-	pop		bp ; get back caller's original BP, discard AX since we don't need it
+;	pop		bp ; get back caller's original BP, discard AX since we don't need it
 	
 	;; Card is unmasked now and user's regs restored, set returns
 	clc
@@ -253,8 +274,9 @@ INT_PKT_SVC_03 PROC FAR ;; 6.5 release_type()
 	; 4.) Restore IRQ (mask IRQ4)
 
 
-	push	bp		; Push caller's BP
-	mov		bp,ax	; Save caller's AX in BP
+;	push	bp		; Push caller's BP
+;	mov		bp,ax	; Save caller's AX in BP
+	push	ax		; Store caller's AX
 
 	; Read current IRQ masks and push
 	in		al,port_pic_data	; Read current IRQ mask register
@@ -311,9 +333,10 @@ INT_PKT_SVC_03 PROC FAR ;; 6.5 release_type()
 	mov		al,ah ; AL has old mask, need to mask IRQ4
 	or		al,mask_modem_bit ; 0001 0000 set/disable IRQ 
 	out		port_pic_data,al
-	
-	mov		ax,bp ; Restore caller's AX
-	pop		bp ; get back caller's original BP
+
+	pop		ax ; Restore caller's AX
+;	mov		ax,bp ; Restore caller's AX
+;	pop		bp ; get back caller's original BP
 	
 	;; Card is masked now and user's regs restored, set return
 	clc
@@ -357,13 +380,10 @@ INT_PKT_SVC_04 PROC FAR  ;; 6.6 send_pkt()
 	INT_PKT_SVC_CLEANUPM ;; ----- EXIT INT_PKT_SVC_04, interrupts will be restored
 INT_PKT_SVC_04 ENDP	
 
-;; Good
-; Doesn't access the card
-; TODO - implement
 INT_PKT_SVC_05 PROC FAR ;; terminate()
 	pop		bx ; Restore caller's BX
 
-	mov		dh,CANT_TERMINATE
+	mov		dh,LOW CANT_TERMINATE
 	stc
 	INT_PKT_SVC_CLEANUPM
 INT_PKT_SVC_05 ENDP
@@ -372,11 +392,12 @@ INT_PKT_SVC_05 ENDP
 INT_PKT_SVC_06 PROC FAR ;; get_address()
 	pop		bx ; Restore caller's BX
 
-	push	ax
+;	push	ax
 	push	ds
 
-	mov		ax,cs
-	mov		ds,ax ; Set DS
+	mov		ds,bp	; Set DS==MEMORYSHIM
+;	mov		ax,cs
+;	mov		ds,ax ; Set DS
 	
 	;; Check if client has enough space for buffer
 	cmp		cx,MAC_ADDRESS_TABLE_L ; Compare available buffer space to table Length
@@ -399,12 +420,12 @@ INT_PKT_SVC_06 PROC FAR ;; get_address()
 	clc
 INT_PKT_SVC_06_CLEANUP:
 	pop		ds
-	pop		ax
+;	pop		ax
 	INT_PKT_SVC_CLEANUPM
 INT_PKT_SVC_06_FAIL: ; Client didn't have the space, bail out
 ; Setup returns
 	stc
-	mov		dh,NO_SPACE
+	mov		dh, LOW NO_SPACE
 	jmp		INT_PKT_SVC_06_CLEANUP
 INT_PKT_SVC_06 ENDP
 
@@ -414,7 +435,7 @@ INT_PKT_SVC_06 ENDP
 INT_PKT_SVC_07 PROC FAR ;; reset_interface()
 	pop		bx ; Restore caller's BX
 	
-	mov		dh,CANT_RESET
+	mov		dh,LOW CANT_RESET
 	stc		; Indicate error condition
 	INT_PKT_SVC_CLEANUPM
 INT_PKT_SVC_07 ENDP
@@ -433,10 +454,11 @@ INT_PKT_SVC_TABLE LABEL WORD
 	dw		OFFSET INT_PKT_SVC_07 ; reset_interface()
 INT_PKT_SVC_TABLE_L EQU $-INT_PKT_SVC_TABLE ; Length of table
 INT_PKT PROC FAR
-	jmp		NEAR PTR INT_PKT_START ; jmp over signature to continue
-	pkt_drvr_signature	db "PKT DRVR",00h ; Required Packet Driver spec signature
-	prog_signature		dw	offset PROGRAM_SIGNATURE ; Pointer to Program signature
-INT_PKT_START:
+;	jmp		NEAR PTR INT_PKT_START ; jmp over signature to continue
+;	pkt_drvr_signature	db "PKT DRVR",00h ; Required Packet Driver spec signature
+;	prog_signature		dw	offset PROGRAM_SIGNATURE ; Pointer to Program signature
+;INT_PKT_START:
+	; BP == MEMORY_SEG on the stack
 	sti				; It'll take us a while to actually stop them anyway...
 	push	bx		; Save caller BX, frees BX for scratch
 	mov		bl,ah	; Move caller's AH (SVC#) to bl
@@ -448,7 +470,7 @@ INT_PKT_START:
 INT_PKT_SVC_EXEC: ;; Else if good, jump to service handler
 	xor		bh,bh	; Zero out upper address, valid BX values are 0-(14-1) decimal
 					; So this is safe
-	jmp		WORD PTR CS:[BX + OFFSET INT_PKT_SVC_TABLE] ; BX contains service handler offset
+	jmp		WORD PTR cs:[bx + OFFSET INT_PKT_SVC_TABLE] ; BX contains service handler offset
 INT_PKT_BAD_SVC: ; If a bad command...
 	xor		bl,bl	; if bad svc requested, force driver_error() handler
 	jmp		SHORT INT_PKT_SVC_EXEC ; now go execute it	
@@ -595,6 +617,11 @@ MAIN PROC FAR
 	mov		ax,cs
 	mov		WORD PTR [IRQ_RECV_SHIM_JMP+3],ax ; Set segment
 
+	; 3.) Update DS:INT_PKT_SHIM_JMP to point at CS:INT_PKT
+	mov		WORD PTR [INT_PKT_SHIM_JMP+1],offset INT_PKT
+	mov		ax,cs
+	mov		WORD PTR [INT_PKT_SHIM_JMP+3],ax ; Set segment
+
 	; Ensure RCV HW IRQ is masked when driver is loaded
 	MASK_IRQ4M ; Uses AX, Flags
 
@@ -604,7 +631,8 @@ MAIN PROC FAR
 	mov		[receive_offset],offset RCV_DUMMY_RET
 
 	; Setup Interrupt INT_PKT (sender API)
-	mov		dx,offset INT_PKT ; DS:DX = segment/offset
+	;mov		dx,offset INT_PKT ; DS:DX = segment/offset
+	mov		dx,offset INT_PKT_SHIM
 	mov		ah,svc_dos_set_interrupt_25
 	mov		al,int_default_pkt_driver
 	int		int_dos_21
