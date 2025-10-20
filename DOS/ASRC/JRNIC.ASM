@@ -482,6 +482,8 @@ INT_PKT ENDP
 
 ;; TEST - going to try and not manipulate IRQs at all
 ; interrupts are now disabled the entire time unless key is pressed
+; TODO: Went ok, but would like to eventually mask NMI + IRQ during stack swap someday
+
 
 IRQ_RECV PROC FAR
 	; CPUs disabled, PIC not ACK'd, interuptee's AX on the stack, AX==MEMORYSHIM
