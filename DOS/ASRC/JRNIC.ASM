@@ -480,7 +480,8 @@ INT_PKT_BAD_SVC: ; If a bad command...
 INT_PKT ENDP
 
 
-
+;; TEST - going to try and not manipulate IRQs at all
+; interrupts are now disabled the entire time unless key is pressed
 
 IRQ_RECV PROC FAR
 	; CPUs disabled, PIC not ACK'd, interuptee's AX on the stack, AX==MEMORYSHIM
@@ -494,19 +495,19 @@ IRQ_RECV_MAIN:
 
 	; Mask All Interupts Dance
 	; 1.) Save initial IRQ masks
-	in		al,port_pic_data		; Get current IRQ masks
-	mov		ah,al					; Hold current IRQ masks in AH
+;	in		al,port_pic_data		; Get current IRQ masks
+;	mov		ah,al					; Hold current IRQ masks in AH
 	; 2.) Mask IRQs
-	mov		al,0FFh					; Mask all IRQs
-	out		port_pic_data,al		; IRQs masked
+;	mov		al,0FFh					; Mask all IRQs
+;	out		port_pic_data,al		; IRQs masked
 	; 3.) Mask NMI
-	mov		al,nmi_disable			; Bit 7 = 0
-	out		port_nmi_mask_reg,al	; Mask NMI
+;	mov		al,nmi_disable			; Bit 7 = 0
+;	out		port_nmi_mask_reg,al	; Mask NMI
 	; 4.) Mark IRQs as disabled with CPU flag
-	cli								;post NMI disable
+;	cli								;post NMI disable
 	; 5.) Unmask IRQs now that they're disabled
-	mov		al,ah					; Recover IRQ mask
-	out		port_pic_data,al		; Un-mask IRQs (still blocked by CLI)
+;	mov		al,ah					; Recover IRQ mask
+;	out		port_pic_data,al		; Un-mask IRQs (still blocked by CLI)
 	
 	;; Swap to internal stack
 	mov		ax,ds ; Our memory shim
@@ -545,10 +546,10 @@ IRQ_RECV_MAIN:
 		
 	;; Re-enable other interrupts (we haven't yet acknowledged IRQ4 so it shouldn't fire again)
 		; Unmask NMI
-	mov		al,nmi_enable
-	out		port_nmi_mask_reg,al	; Restore NMI
+;	mov		al,nmi_enable
+;	out		port_nmi_mask_reg,al	; Restore NMI
 		; Re-enable interrupts now that card accesses are complete
-	sti							; Interrupts re-enabled
+;	sti							; Interrupts re-enabled
 	
 	;; Ok, now tell receiver (call 1) we have a packet, ask if they have room for it
 	sub		ax,ax	; First call flag (0)
