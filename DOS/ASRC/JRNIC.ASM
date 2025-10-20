@@ -1,6 +1,9 @@
 TITLE jrNIC - Packet Driver
 PAGE 66,132 ; 66 lines per page, 99 characters/line
 
+; Starting from dev_packet_driver_development (works *iff* using int13fix)
+;	1.) Adding entry shim for IRQ_RECV
+
 PAGE
 %OUT Processing jrNIC Build Flags
 INCLUDE JRBLDFLG.ASM
@@ -14,6 +17,13 @@ PAGE
 INCLUDE JRMACROS.ASM
 
 PAGE
+PLACEHOLDER SEGMENT AT 0h ; Placeholder segment to allow assembly of placeholder FAR jumps
+	assume CS:PLACEHOLDER, DS:PLACEHOLDER
+	ORG 0h
+	PLACEHOLDER_JMP:
+PLACEHOLDER ENDS
+
+PAGE
 CODESEG SEGMENT
 	assume CS:CODESEG, DS:CODESEG, SS:CODESEG
 
@@ -21,6 +31,13 @@ BEGINOFPROG EQU $	; Mark 0000h for calculations
 	ORG	100h
 PROGRAM:
 	jmp			NEAR PTR MAIN				; DOS Command Entry Point
+IRQ_RECV_SHIM PROC FAR
+	push	ax			; Store interuptee's AX
+	mov		ax,cs		; Store MEMORYSEGMENT in AX
+IRQ_RECV_SHIM_JMP:
+	jmp		FAR PTR		PLACEHOLDER_JMP ; Placeholder, will be replaced at runtime with jump to IRQ_RECV
+IRQ_RECV_SHIM ENDP
+
 
 PROGRAM_SIGNATURE:
 	drv_signature:
@@ -439,28 +456,13 @@ INT_PKT ENDP
 
 
 
-;; IRQ for Receive
-;; This must preserve ALL registers and state
-;; To get here, interrupts *must* have been enabled, disabled on entry
-;; To get here, IRQ4 *must* have been unmasked
-;; Don't currently know what the status of NMI is,
-;;   Have to assume if interrupts were enabled and IRQ4 was enabled
-;;   that NMI was enabled...
-;; NOTE: CPU INT process to get here puts 6 bytes on interruptee's stack
-;;		This routine puts another 8 bytes (14 total) intentionally
-;;		It is *possible* (though unlikely) that NMI could fire and a higher priority IRQ could also fire
-;;		Prior to fully disabling, leading to a seemingly worse case scenario:
-;;			6(this) + 2(this before disable) + 6(INT48) + 6(INT9) + 6(other IRQ)
+
 IRQ_RECV PROC FAR
-;interuptee_stack_seg	dw 0000h
-;interuptee_stack_ptr	dw 0000h
-	push	ax
-	push	ds		; Push interuptee's AX (scratch) and DS (segment)
-	
-	mov		ax,cs
-	mov		ds,ax	; Setup local DS to our memory shim
-	jmp		IRQ_RECV_MAIN ; Placeholder to eventually support cartridge
+	; CPUs disabled, PIC not ACK'd, interuptee's AX on the stack, AX==MEMORYSHIM
 IRQ_RECV_MAIN:
+	push	ds		; Push interuptee's DS on the stack
+	mov		ds,ax	; Set DS to MEMORYSHIM
+	
 	mov		ax,ss
 	mov		[interuptee_stack_seg],ax	
 	mov		[interuptee_stack_ptr],sp	; Save interuptee's SS/SP
@@ -584,10 +586,15 @@ IRQ_RECV ENDP
 ;; Test driver only RAM loadable
 ;; Test driver will load entirely into RAM
 MAIN PROC FAR
-	; Set DS
-	mov		ax,cs
-	mov		ds,ax
+	; Leave DS as is
 	
+	;1.) TODO - copy memoryshim to memory for cartridge
+
+	;2.) Update DS:IRQ_RECV_SHIM_JMP to point at CS:IRQ_RECV
+	mov		WORD PTR [IRQ_RECV_SHIM_JMP+1],offset IRQ_RECV
+	mov		ax,cs
+	mov		WORD PTR [IRQ_RECV_SHIM_JMP+3],ax ; Set segment
+
 	; Ensure RCV HW IRQ is masked when driver is loaded
 	MASK_IRQ4M ; Uses AX, Flags
 
@@ -603,7 +610,8 @@ MAIN PROC FAR
 	int		int_dos_21
 	
 	; Setup Interrupt IRQ_RECV (receive HW IRQ)
-	mov		dx,offset IRQ_RECV ; DS:DX = segment/offset
+	;mov		dx,offset IRQ_RECV ; DS:DX = segment/offset
+	mov		dx,offset IRQ_RECV_SHIM
 	mov		ah,svc_dos_set_interrupt_25
 	mov		al,int_modem
 	int		int_dos_21
