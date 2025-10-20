@@ -10,6 +10,9 @@ PAGE 66,132 ; 66 lines per page, 99 characters/line
 ;; While typing it *seems* possible to blow the stack if we receive a packet
 ;;	- Which we receive packets all the time just from general network chatter
 
+;; Thoughts:
+; Want to experiment with interrupt status in RECV and PKT
+
 PAGE
 %OUT Processing jrNIC Build Flags
 INCLUDE JRBLDFLG.ASM
@@ -626,18 +629,18 @@ MAIN PROC FAR
 	MASK_IRQ4M ; Uses AX, Flags
 
 	; Setup Default Receive handler
-	mov		ax,cs
+	mov		ax,cs ; Relative to CS
 	mov		[receive_segment],ax
 	mov		[receive_offset],offset RCV_DUMMY_RET
 
-	; Setup Interrupt INT_PKT (sender API)
+	; Setup Interrupt INT_PKT_SHIM (sender API), relative to DS
 	;mov		dx,offset INT_PKT ; DS:DX = segment/offset
 	mov		dx,offset INT_PKT_SHIM
 	mov		ah,svc_dos_set_interrupt_25
 	mov		al,int_default_pkt_driver
 	int		int_dos_21
 	
-	; Setup Interrupt IRQ_RECV (receive HW IRQ)
+	; Setup Interrupt IRQ_RECV_SHIM (receive HW IRQ), relative to DS
 	;mov		dx,offset IRQ_RECV ; DS:DX = segment/offset
 	mov		dx,offset IRQ_RECV_SHIM
 	mov		ah,svc_dos_set_interrupt_25
@@ -646,6 +649,9 @@ MAIN PROC FAR
 	
 	; Initialize, ENABLE_RX and UNMASK will be done upon access_type() (SVC_02) call
 	call	HAL_INIT
+
+	; Ensure CPU interrupts are enabled
+	sti
 
 	; TSR
 	mov		dx,RESIDENT_PARA  ; DS:DX = Resident Location + Paras to retain
