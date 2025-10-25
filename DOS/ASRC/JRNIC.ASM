@@ -35,29 +35,72 @@ PLACEHOLDER ENDS
 PAGE
 CODESEG SEGMENT
 	assume CS:CODESEG, DS:CODESEG, SS:CODESEG
-
 BEGINOFPROG EQU $	; Mark 0000h for calculations
+
+IF ROM	; Define ROM Cartridge Header
+	
+	ORG 0		; Cartridge Header starts at offset 0
+PROGRAM:
+	CARTSIG		dw 0AA55h					; Cartridge Signature word
+	CARTSIZ		db (ENDOFPROG - BEGINOFPROG) / 512 ; Cartridge size (in 512 byte chunks)
+;	BIOS Entry
+	jmp			NEAR PTR CART_INIT			; Cartridge BIOS Init Entry Point - TODO - Implement
+;	DOS COMMAND 1
+	DOSCMD1L	db DOSCMD1E - DOSCMD1S			; Length of DOS Command1 name
+	DOSCMD1S	db "CJRNIC"						; DOS Command1 name string
+	DOSCMD1E:									; End of Command1 name string
+	jmp			NEAR PTR MAIN					;; DOS Command1 Entry Point
+;	END OF CART HEADER
+	CARTEOH		db 00h							;; End of cartridge header
+	ORG 100h
+	jmp			NEAR PTR PROGRAM				; Placeholder for segement alignment
+
+ELSE ; IF COM
 	ORG	100h
 PROGRAM:
 	jmp			NEAR PTR MAIN				; DOS Command Entry Point
+ENDIF
+
+PAGE ;; Memory SHIM
+MEMORYSHIMBEGIN: ; For ROM runs, this must be copied into RAM at the end of PSP	
 INT_PKT_SHIM PROC FAR
 	jmp		NEAR PTR INT_PKT_SHIM_START
 	pkt_drvr_signature	db "PKT DRVR",00h ; Required Packet Driver spec signature
-	prog_signature		dw	offset PROGRAM_SIGNATURE ; Pointer to Program signature
+	prog_signature		dw	offset PROGRAM_SIGNATURE ; Pointer to Program signature cartridge offset
+	prog_sig_seg_ptr	dw	offset INT_PKT_SHIM_JMP+3 ; Pointer to Program signature cartridge segment
 INT_PKT_SHIM_START:
 	push	bp			; Store caller's BP
 	mov		bp,cs		; Store MEMORYSEGMENT in BP
-INT_PKT_SHIM_JMP:
+INT_PKT_SHIM_JMP: ; +1 == offset, +3 == segment
 	jmp		FAR PTR		PLACEHOLDER_JMP ; Placeholder, will be replaced at runtime with jump to INT_PKT
 INT_PKT_SHIM ENDP
+
 IRQ_RECV_SHIM PROC FAR
 	push	ax			; Store interuptee's AX
 	mov		ax,cs		; Store MEMORYSEGMENT in AX
-IRQ_RECV_SHIM_JMP:
+IRQ_RECV_SHIM_JMP: ; +1 == offset, +3 == segment
 	jmp		FAR PTR		PLACEHOLDER_JMP ; Placeholder, will be replaced at runtime with jump to IRQ_RECV
 IRQ_RECV_SHIM ENDP
 
+;; Vars
+MAC_ADDRESS_TABLE LABEL BYTE
+	db 00h, 03h, 01h, 04h, 01h, 05h ; Default made up source MAC address
+MAC_ADDRESS_TABLE_L EQU $-MAC_ADDRESS_TABLE
 
+;driver_in_use	dw 0000h
+receive_offset	dw 0000h
+receive_segment	dw 0000h
+packet_size		dw 0000h
+interuptee_stack_seg	dw 0000h
+interuptee_stack_ptr	dw 0000h
+
+MEMORYSHIMEND:	; For ROM runs, this must be copied into RAM at the end of PSP
+
+;;;
+;; If ROM, Receive Stack will be here
+;;;
+
+PAGE ; Signature/Version stuff - stored in main program now
 PROGRAM_SIGNATURE:
 	drv_signature:
 	drv_vendor		db "RETROBYTEN"
@@ -71,19 +114,6 @@ DRIVER_INFO:
 	DRV_IFNUM db 0 ; NUMBER, CL (First (0th) interface card for 1(Bluebook)/FFFF(Generic))
 	DRV_NAME db "jrNIC$",0 ; NAME, DS:SI (Plain-text Name of the card)
 	DRV_FUNC db 1 ; FUNCTIONALITY, AL (Implements basic functions only)
-
-MAC_ADDRESS_TABLE LABEL BYTE
-	db 00h, 03h, 01h, 04h, 01h, 05h ; Default made up source MAC address
-MAC_ADDRESS_TABLE_L EQU $-MAC_ADDRESS_TABLE
-
-;; Vars
-;driver_in_use	dw 0000h
-receive_offset	dw 0000h
-receive_segment	dw 0000h
-packet_size		dw 0000h
-interuptee_stack_seg	dw 0000h
-interuptee_stack_ptr	dw 0000h
-
 
 PAGE
 %OUT Processing JRNICHAL
@@ -606,6 +636,10 @@ IRQ_RECV_END_PROCESSING:
 	iret
 IRQ_RECV ENDP
 
+
+CART_INIT PROC FAR
+	ret				; NO-OP/Far return for now
+CART_INIT ENDP
 
 
 ;; Test driver will only load at 0x60
