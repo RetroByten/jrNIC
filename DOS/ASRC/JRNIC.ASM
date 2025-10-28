@@ -1,5 +1,6 @@
 TITLE jrNIC - Packet Driver
-PAGE 66,132 ; 66 lines per page, 99 characters/line
+;PAGE 66,132 ; 66 lines per page, 99 characters/line
+PAGE 66,132
 
 ; Starting from dev_packet_driver_development (works *iff* using int13fix)
 ;	1.) Adding entry shim for IRQ_RECV (commited)
@@ -12,6 +13,8 @@ PAGE 66,132 ; 66 lines per page, 99 characters/line
 
 ;; Thoughts:
 ; Want to experiment with interrupt status in RECV and PKT
+
+VER EQU 0001h ; Version of the driver, increment this for each major release
 
 PAGE
 %OUT Processing jrNIC Build Flags
@@ -42,7 +45,8 @@ IF ROM	; Define ROM Cartridge Header
 	ORG 0		; Cartridge Header starts at offset 0
 PROGRAM:
 	CARTSIG		dw 0AA55h					; Cartridge Signature word
-	CARTSIZ		db (ENDOFPROG - BEGINOFPROG) / 512 ; Cartridge size (in 512 byte chunks)
+	CARTSIZ		db ((ENDOFPROG - BEGINOFPROG) / 512)+1 ; Cartridge size (in 512 byte chunks)
+														; Rounded up for now
 ;	BIOS Entry
 	jmp			NEAR PTR CART_INIT			; Cartridge BIOS Init Entry Point - TODO - Implement
 ;	DOS COMMAND 1
@@ -53,16 +57,15 @@ PROGRAM:
 ;	END OF CART HEADER
 	CARTEOH		db 00h							;; End of cartridge header
 	ORG 100h
-	jmp			NEAR PTR PROGRAM				; Placeholder for segement alignment
-
+	MEMORYSHIMBEGIN: ; For ROM runs, this must be copied into RAM at the end of PSP
+	jmp			NEAR PTR PROGRAM			; Placeholder for segement alignment
 ELSE ; IF COM
 	ORG	100h
 PROGRAM:
+	MEMORYSHIMBEGIN: ; For ROM runs, this must be copied into RAM at the end of PSP
 	jmp			NEAR PTR MAIN				; DOS Command Entry Point
 ENDIF
 
-PAGE ;; Memory SHIM
-MEMORYSHIMBEGIN: ; For ROM runs, this must be copied into RAM at the end of PSP	
 INT_PKT_SHIM PROC FAR
 	jmp		NEAR PTR INT_PKT_SHIM_START
 	pkt_drvr_signature	db "PKT DRVR",00h ; Required Packet Driver spec signature
@@ -119,9 +122,6 @@ PAGE
 %OUT Processing JRNICHAL
 INCLUDE JRNICHAL.ASM
 
-PAGE
-%OUT Processing jrNIC Utils
-INCLUDE JRUTIL.ASM
 
 ;; Dummy receive handler, returns buffer size 0 aka error
 RCV_DUMMY_RET PROC FAR
@@ -185,19 +185,21 @@ INT_PKT_SVC_01 PROC FAR ;; 6.3 driver_info()
 ;	push	ax ; Temporarily push AX to preserve AH
 ;	mov		ax,cs
 ;	mov		ds,ax ; DS used for variables
-	mov		ds,bp ; DS == MEMORYSHIM
+	
+	mov		bx,cs
+	mov		ds,bx ; DS == CODESEG
 
 	;; Setup returns
 	clc							; Return success
-	mov		bx,[DRV_PKT_VERSION]
-	mov		ch,[DRV_IFCLASS]
-	mov		dx,[DRV_IFTYPE]
-	mov		cl,[DRV_IFNUM]
+	mov		bx,cs:[DRV_PKT_VERSION]
+	mov		ch,cs:[DRV_IFCLASS]
+	mov		dx,cs:[DRV_IFTYPE]
+	mov		cl,cs:[DRV_IFNUM]
 	;mov		ax,cs
 	;mov		ds,ax				; DS:SI = NAME, DS already set
 	mov		si,offset DRV_NAME
 ;	pop		ax					; restore AH
-	mov		al,[DRV_FUNC]
+	mov		al,cs:[DRV_FUNC]
 INT_PKT_SVC_01_CLEANUP:
 	INT_PKT_SVC_CLEANUPM
 INT_PKT_SVC_01 ENDP
@@ -473,6 +475,17 @@ INT_PKT_SVC_07 PROC FAR ;; reset_interface()
 	INT_PKT_SVC_CLEANUPM
 INT_PKT_SVC_07 ENDP
 
+
+;; TODOReturns:
+; ES:DI = IRQ_RECV SEG:OFFSET
+; DS:SI = INT_PKT
+INT_PKT_SVC_08 PROC FAR
+	pop		bx ; Restore caller's BX
+
+	stc
+	INT_PKT_SVC_CLEANUPM
+INT_PKT_SVC_08 ENDP
+
 ; Called services must:
 ; 1.) Immediately pop BX to retrieve caller's BX
 ; 2.) Must ensure proper carry is returned
@@ -485,6 +498,7 @@ INT_PKT_SVC_TABLE LABEL WORD
 	dw		OFFSET INT_PKT_SVC_05 ; terminate()
 	dw		OFFSET INT_PKT_SVC_06 ; get_address()
 	dw		OFFSET INT_PKT_SVC_07 ; reset_interface()
+	dw		OFFSET INT_PKT_SVC_08 ; get_internals()
 INT_PKT_SVC_TABLE_L EQU $-INT_PKT_SVC_TABLE ; Length of table
 INT_PKT PROC FAR
 ;	jmp		NEAR PTR INT_PKT_START ; jmp over signature to continue
@@ -514,6 +528,11 @@ INT_PKT ENDP
 ; interrupts are now disabled the entire time unless key is pressed
 ; TODO: Went ok, but would like to eventually mask NMI + IRQ during stack swap someday
 
+; Tried to get rid of the receive buffer
+; But best guess is that its too slow for a modern network
+IRQ_RECV_BAIL:
+	call	NEAR PTR HAL_ENABLE_RX ; Re-enable/reset reception (uses AX/DX/flags)
+	jmp		NEAR PTR IRQ_RECV_END_PROCESSING
 
 IRQ_RECV PROC FAR
 	; CPUs disabled, PIC not ACK'd, interuptee's AX on the stack, AX==MEMORYSHIM
@@ -524,22 +543,6 @@ IRQ_RECV_MAIN:
 	mov		ax,ss
 	mov		[interuptee_stack_seg],ax	
 	mov		[interuptee_stack_ptr],sp	; Save interuptee's SS/SP
-
-	; Mask All Interupts Dance
-	; 1.) Save initial IRQ masks
-;	in		al,port_pic_data		; Get current IRQ masks
-;	mov		ah,al					; Hold current IRQ masks in AH
-	; 2.) Mask IRQs
-;	mov		al,0FFh					; Mask all IRQs
-;	out		port_pic_data,al		; IRQs masked
-	; 3.) Mask NMI
-;	mov		al,nmi_disable			; Bit 7 = 0
-;	out		port_nmi_mask_reg,al	; Mask NMI
-	; 4.) Mark IRQs as disabled with CPU flag
-;	cli								;post NMI disable
-	; 5.) Unmask IRQs now that they're disabled
-;	mov		al,ah					; Recover IRQ mask
-;	out		port_pic_data,al		; Un-mask IRQs (still blocked by CLI)
 	
 	;; Swap to internal stack
 	mov		ax,ds ; Our memory shim
@@ -563,25 +566,20 @@ IRQ_RECV_MAIN:
 	;; --- Begin card accesses
 	call	HAL_GET_PACKET_SIZE ; get packet size into AX (uses AX/DX/FLAGS), sets READ_PTR
 	;; Ideally would check for zero
+	cmp		ax,0
+	
 	sub		ax,4 ; Subtract Frame Check Sequence from length (Per Packet Spec)
 	mov		[packet_size],ax	; Save packet size
-	
+		
 	;; Copy packet to internal buffer so we can release the card
 	mov		cx,ax
-	mov		ax,cs
+	mov		ax,ds	; Copy to internal MEMORYSHIM buffer
 	mov		es,ax	; Setup ES
 	mov		di,offset	RECV_BUFFER_OFFSET
 	HAL_RXP ; Macro, uses AX/DX - Input: ES:DI, CX
 	; Re-enable reception
 	call	HAL_ENABLE_RX ; Re-enable/reset reception (uses AX/DX/flags)
 	;; --- Card accesses complete
-		
-	;; Re-enable other interrupts (we haven't yet acknowledged IRQ4 so it shouldn't fire again)
-		; Unmask NMI
-;	mov		al,nmi_enable
-;	out		port_nmi_mask_reg,al	; Restore NMI
-		; Re-enable interrupts now that card accesses are complete
-;	sti							; Interrupts re-enabled
 	
 	;; Ok, now tell receiver (call 1) we have a packet, ask if they have room for it
 	sub		ax,ax	; First call flag (0)
@@ -636,21 +634,95 @@ IRQ_RECV_END_PROCESSING:
 	iret
 IRQ_RECV ENDP
 
+PAGE
+%OUT Processing jrNIC Utils
+INCLUDE JRUTIL.ASM
+
+ENDOFTSR:	; TODO: end the TSR here at some point...
+
 
 CART_INIT PROC FAR
+	; 1.) Figure out where the current top of memory is
+		; 0000:0413 - 0414, # kilobytes
+	push	ax
+	push	cx
+	push	ds
+	push	es
+	
+	
+	sub		ax,ax ; Interrupt Vector Table Segment
+	mov		es,ax
+		; 0000:0413-0414h: BIOS Data Area, Useable Memory (K)
+		; Subtract 4 (4K) to reserve for the packet driver
+										; Memory shim
+										; Receive Buffer
+										; Receive Stack
+	sub        WORD PTR es:[0413h],4
+		
+	; 3.) Convert Updated useable memory segment for us to use
+	mov		ax,es:[0413h]
+	mov		cl,6	; SHL 10 to convert from K to raw bytes, then
+	shl		ax,cl	; SHR 4 to convert to segment == SHL 6
+	mov		ds,ax ; DS==Reserved memory
+	
+	; 4.) Setup card
+	call	NEAR PTR	SETUP
+	
+	
+	;call	PXE
+	;	sub		ax,4 ; Reserve 4K for the Network Client buffers:
+	;					; Receive Buffer
+	;					; Desired SEND Buffer
+	;					; Gratuitous ARP
+	;					; ARP Response
+	
+	
+	pop		es
+	pop		ds
+	pop		cx
+	pop		ax
+	
+	
 	ret				; NO-OP/Far return for now
 CART_INIT ENDP
 
 
-;; Test driver will only load at 0x60
-;; Test driver will not check if previously loaded
-;; Test driver will not unload (reboot required)
-;; Test driver only RAM loadable
-;; Test driver will load entirely into RAM
-MAIN PROC FAR
-	; Leave DS as is
+;; Generic setup for BIOS/ROM/COM initialization
+; 1.) Expects DS=PSP area (will copy to PSP+100h)
+; 2.) Does Near return, expects caller to do some form
+; 		of Residence/TSR
+SETUP PROC NEAR
+	push	ax
+	push	cx
+	push	si
+	push	di
+	push	ds
+	push	es
+
+	; Ensure RCV HW IRQ is masked when driver is loaded
+	MASK_IRQ4M ; Uses AX, Flags
+
+	;1.) Copy Memoryshim from CODE:100 to PSP:100
+	; 		Note for DOS COM this is technically redundant
+	; 		Set Source and Destination Segments
+	push	ds	; Temporarily store PSP
 	
-	;1.) TODO - copy memoryshim to memory for cartridge
+	mov		ax,ds
+	mov		es,ax ; ES=PSP
+	mov		ax,cs
+	mov		ds,ax ; DS==CODE
+	
+	;		Set Source and Destination offsets
+	mov		si,offset MEMORYSHIMBEGIN
+	mov		di,offset MEMORYSHIMBEGIN
+	;		Set Size (in bytes)
+	mov		cx,MEMORYSHIMEND-MEMORYSHIMBEGIN
+	;		Set Direction
+	cld
+	;		Do the copy!
+	rep		movsb
+	
+	pop		ds	; Restore current DS==PSP/MEMORYSHIM
 
 	;2.) Update DS:IRQ_RECV_SHIM_JMP to point at CS:IRQ_RECV
 	mov		WORD PTR [IRQ_RECV_SHIM_JMP+1],offset IRQ_RECV
@@ -662,13 +734,10 @@ MAIN PROC FAR
 	mov		ax,cs
 	mov		WORD PTR [INT_PKT_SHIM_JMP+3],ax ; Set segment
 
-	; Ensure RCV HW IRQ is masked when driver is loaded
-	MASK_IRQ4M ; Uses AX, Flags
-
 	; Setup Default Receive handler
 	mov		ax,cs ; Relative to CS
-	mov		[receive_segment],ax
-	mov		[receive_offset],offset RCV_DUMMY_RET
+	mov		WORD PTR [receive_segment],ax
+	mov		WORD PTR [receive_offset],offset RCV_DUMMY_RET
 
 	; Setup Interrupt INT_PKT_SHIM (sender API), relative to DS
 	;mov		dx,offset INT_PKT ; DS:DX = segment/offset
@@ -689,6 +758,29 @@ MAIN PROC FAR
 
 	; Ensure CPU interrupts are enabled
 	sti
+	
+	pop		es
+	pop		ds
+	pop		di
+	pop		si
+	pop		cx
+	pop		ax
+	
+	ret
+SETUP ENDP
+
+;; Test driver will only load at 0x60
+;; Test driver will not check if previously loaded
+;; Test driver will not unload (reboot required)
+;; Test driver only RAM loadable
+;; Test driver will load entirely into RAM
+MAIN PROC FAR
+	; !!Leave DS as is!!
+	; DOS COM loader will set CS == (DS == PSP)
+	; DOS ROM loader will set CS != (DS == PSP)
+	; (Note: BIOS ROM loader will need to handle 
+	;	this on its own since it can't use DOS Terminate)
+	call	NEAR PTR SETUP ; 
 
 	; TSR
 	mov		dx,RESIDENT_PARA  ; DS:DX = Resident Location + Paras to retain
