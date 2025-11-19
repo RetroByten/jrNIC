@@ -1,0 +1,5 @@
+Goals:
+1.) Use PCjr ~RESET signal to ensure ~LATCH_R is reset on power-up
+2.) Add shift registers
+3.) Add level shifters
+4.) Add DIP spares
