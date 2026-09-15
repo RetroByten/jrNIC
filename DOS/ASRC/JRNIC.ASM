@@ -642,6 +642,10 @@ ENDOFTSR:	; TODO: end the TSR here at some point...
 
 
 CART_INIT PROC FAR
+	;; NOT IMPLEMENTED YET ;;
+	ret
+	;; NOT IMPLEMENTED YET ;;
+	
 	; 1.) Figure out where the current top of memory is
 		; 0000:0413 - 0414, # kilobytes
 	push	ax
@@ -796,4 +800,3 @@ PAGE
 INCLUDE JREQUE.ASM ; These are not known up-front, dynamically calculated
 
 END PROGRAM
-
